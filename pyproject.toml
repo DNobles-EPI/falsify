@@ -15,6 +15,11 @@ dependencies = [
     "transitions (>=0.9)",
 ]
 
+[project.scripts]
+falsify = "falsify.cli:main"
+
+[tool.poetry]
+packages = [{include = "falsify", from = "src"}]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

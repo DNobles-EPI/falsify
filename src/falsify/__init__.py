@@ -2,12 +2,38 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, List, Optional, Tuple
 
 from transitions import Machine
+
+
+# ── console colours ───────────────────────────────────────────────────────────
+
+_TTY   = sys.stdout.isatty()
+_RST   = "\x1b[0m"  if _TTY else ""
+_BOLD  = "\x1b[1m"  if _TTY else ""
+_DIM   = "\x1b[2m"  if _TTY else ""
+_GREEN = "\x1b[32m" if _TTY else ""
+_RED   = "\x1b[31m" if _TTY else ""
+
+_STATE_COL: dict[str, str] = ({
+    "PLAN":               "\x1b[34m",   # blue
+    "DO":                 "\x1b[36m",   # cyan
+    "LOCAL_VERIFY":       "\x1b[36m",   # cyan
+    "RUN_IMPACTED_TESTS": "\x1b[36m",   # cyan
+    "FIX_FAILING_TEST":   "\x1b[33m",   # yellow
+    "COMMIT":             "\x1b[32m",   # green
+    "PR_SYNC":            "\x1b[32m",   # green
+    "WAIT_CI":            "\x1b[35m",   # magenta
+    "TRIAGE_CI_FAIL":     "\x1b[31m",   # red
+    "DONE":               "\x1b[32m",   # green
+} if _TTY else {})
+
+_W = 22  # state-name column width
 
 
 # ── shell helpers ─────────────────────────────────────────────────────────────
@@ -90,7 +116,7 @@ class AgentFSM:
     ]
 
     # (source, dest, trigger) — single source of truth for graph structure.
-    # Consumed by observer.py and scripts/gen_diagram.py.
+    # Consumed by falsify.observer and scripts/gen_diagram.py.
     edges: List[Tuple[str, str, str]] = [
         ("PLAN",               "DO",                "todos_loaded"),
         ("DO",                 "LOCAL_VERIFY",      "todo_batch_done"),
@@ -108,8 +134,9 @@ class AgentFSM:
         ("TRIAGE_CI_FAIL",     "PLAN",              "add_failure_to_todos"),
     ]
 
-    def __init__(self, ctx: Optional[Context] = None):
+    def __init__(self, ctx: Optional[Context] = None) -> None:
         self.ctx = ctx or Context()
+        self._start_time = time.monotonic()
 
         transitions = [
             dict(trigger=t, source=s, dest=d)
@@ -151,27 +178,28 @@ class AgentFSM:
     # ── state entry handlers ──────────────────────────────────────────────────
 
     def on_enter_PLAN(self):
-        self.log("PLAN: load todos")
+        self.log("loading todos…")
         self.load_todos()
         self.todos_loaded()
 
     def on_enter_DO(self):
-        self.log(f"DO: {len(self.ctx.todos)} todos")
+        n = len(self.ctx.todos)
+        self.log(f"{n} todo{'s' if n != 1 else ''} queued")
         self.do_todo_batch()
         self.todo_batch_done()
 
     def on_enter_LOCAL_VERIFY(self):
         self.refresh_git_status()
-        self.log(f"LOCAL_VERIFY: git_dirty={self.ctx.git_dirty}")
+        self.log("dirty" if self.ctx.git_dirty else "clean")
         if self.is_git_dirty():
             self.git_dirty()
         else:
             self.git_clean()
 
     def on_enter_RUN_IMPACTED_TESTS(self):
-        self.log("RUN_IMPACTED_TESTS: selecting impacted tests")
         self.select_impacted_tests()
-        self.log(f"RUN_IMPACTED_TESTS: running {len(self.ctx.impacted_tests)} tests")
+        n = len(self.ctx.impacted_tests)
+        self.log(f"{n} test{'s' if n != 1 else ''}")
         self.run_tests()
         if self.any_failures():
             self.any_fail()
@@ -179,23 +207,25 @@ class AgentFSM:
             self.all_pass()
 
     def on_enter_FIX_FAILING_TEST(self):
-        self.log(f"FIX_FAILING_TEST: {len(self.ctx.failing)} failing")
+        n = len(self.ctx.failing)
+        self.log(f"{n} failing")
         self.fix_one_failure()
         self.patch_applied()
 
     def on_enter_COMMIT(self):
-        self.log("COMMIT: committing changes")
+        self.log("staging and committing…")
         self.git_commit()
         self.committed()
 
     def on_enter_PR_SYNC(self):
-        self.log("PR_SYNC: sync PR to dev")
+        self.log(f"push {self.ctx.feat_branch!r} → dev")
         self.pr_sync_to_dev()
+        self.log_detail(f"PR #{self.ctx.pr_id}")
         self.pr_created_or_updated()
 
     def on_enter_WAIT_CI(self):
         self.poll_ci()
-        self.log(f"WAIT_CI: ci_status={self.ctx.ci_status} approved={self.ctx.approved}")
+        self.log(f"ci={self.ctx.ci_status or 'unknown'}  approved={self.ctx.approved}")
 
         if self.pr_is_approved():
             self.pr_approved()
@@ -214,12 +244,12 @@ class AgentFSM:
             self.ci_passed_not_approved()
 
     def on_enter_TRIAGE_CI_FAIL(self):
-        self.log("TRIAGE_CI_FAIL: translating CI failure to todos")
+        self.log("triaging CI failure…")
         self.triage_ci_failure()
         self.add_failure_to_todos()
 
     def on_enter_DONE(self):
-        self.log("DONE: PR approved")
+        self.log("PR approved ✓")
 
     # ── actions ───────────────────────────────────────────────────────────────
 
@@ -246,12 +276,21 @@ class AgentFSM:
                 },
             ))
 
-        self.log(f"  loaded {len(self.ctx.todos)} todos from PR #{self.ctx.pr_id}")
+        self.log_detail(f"{len(self.ctx.todos)} todos from PR #{self.ctx.pr_id}")
 
     def do_todo_batch(self) -> None:
         while self.ctx.todos:
             todo = self.ctx.todos.pop(0)
-            self.log(f"  doing todo: {todo.kind}")
+            if todo.kind == "review_comment":
+                path = todo.payload.get("path") or "?"
+                line = todo.payload.get("line") or "?"
+                desc = f"review_comment @ {path}:{line}"
+            elif todo.kind == "ci_failure":
+                detail = todo.payload.get("check") or todo.payload.get("reason", "?")
+                desc = f"ci_failure: {detail}"
+            else:
+                desc = todo.kind
+            self.log_detail(desc)
             self.do_todo(todo)
 
     def do_todo(self, todo: Todo) -> None:
@@ -272,7 +311,7 @@ class AgentFSM:
                     f"CI check '{check}' failed. Details: {url}\n\nInvestigate and fix."
                 )
         else:
-            self.log(f"  unhandled todo kind: {todo.kind!r}")
+            self.log_detail(f"unhandled todo kind: {todo.kind!r}")
 
     def _invoke_agent(self, task: str) -> None:
         """
@@ -320,13 +359,13 @@ class AgentFSM:
 
     def select_impacted_tests(self) -> None:
         if self.ctx.force_full_suite_next:
-            self.log("  force_full_suite_next=True -> FULL_SUITE")
+            self.log_detail("force full suite")
             self.ctx.force_full_suite_next = False
             self.ctx.impacted_tests = [Test(file="", nodeid="FULL_SUITE")]
             return
 
         changed = self._changed_files()
-        self.log(f"  changed_files={len(changed)}")
+        self.log_detail(f"{len(changed)} changed file(s)")
 
         test_paths: List[str] = []
         for f in changed:
@@ -334,6 +373,7 @@ class AgentFSM:
         test_paths = sorted(set(test_paths))
 
         if not test_paths:
+            self.log_detail("no mapped tests → full suite")
             self.ctx.impacted_tests = [Test(file="", nodeid="FULL_SUITE")]
             return
 
@@ -345,6 +385,10 @@ class AgentFSM:
             result = self.run_test(test)
             if result != "pass":
                 self.ctx.failing.append((test, result))
+                first_line = result.splitlines()[0] if result else "failed"
+                self.log_detail(f"{_RED}✗{_RST} {test.nodeid}  {_DIM}{first_line}{_RST}")
+            else:
+                self.log_detail(f"{_GREEN}✓{_RST} {test.nodeid}")
 
     def run_test(self, test: Test) -> str:
         if test.nodeid == "FULL_SUITE":
@@ -364,7 +408,7 @@ class AgentFSM:
         if not self.ctx.failing:
             return
         test, result = self.ctx.failing[0]
-        self.log(f"  fixing: {test.nodeid}")
+        self.log_detail(f"fix: {test.nodeid}")
         self._invoke_agent(
             f"Fix the failing test: {test.nodeid}\n\nTest output:\n{result}"
         )
@@ -376,6 +420,8 @@ class AgentFSM:
         stat = sh(["git", "diff", "--cached", "--stat"]).stdout.strip()
         msg = f"agent: automated changes\n\n{stat}"
         sh(["git", "commit", "-m", msg])
+        summary = stat.splitlines()[-1] if stat else "nothing staged"
+        self.log_detail(summary)
         self.ctx.git_dirty = False
 
     def pr_sync_to_dev(self) -> None:
@@ -459,7 +505,7 @@ class AgentFSM:
             self.ctx.ci_status = "running"
 
     def triage_ci_failure(self) -> None:
-        """Convert CI failure -> actionable Todo(s)."""
+        """Convert CI failure → actionable Todo(s)."""
         if not self.ctx.pr_id:
             self.ctx.todos.append(Todo(kind="ci_failure", payload={"reason": "no_pr"}))
             return
@@ -503,30 +549,57 @@ class AgentFSM:
                 },
             )
         )
+        self.log_detail(f"→ todo: ci_failure ({cr['name']})")
 
     # ── runner ────────────────────────────────────────────────────────────────
 
     def run(self, max_steps: int = 10_000) -> None:
         """
-        Step the machine until DONE or max_steps.
-        Because we use queued=True and triggers inside on_enter_*, the machine
-        progresses naturally after entering PLAN.
-        """
-        steps = 0
-        while self.state != "DONE" and steps < max_steps:
-            steps += 1
-            time.sleep(0.01)
+        Run the FSM to completion.
 
-        if self.state != "DONE":
-            raise RuntimeError(f"FSM did not finish. state={self.state} steps={steps}")
+        The machine is kicked off by entering PLAN in a background thread so
+        that blocking operations (e.g. the 10 s WAIT_CI poll sleep) don't
+        prevent the observer from reading self.state.  The main thread polls
+        every 0.1 s until DONE or max_steps checks.
+        """
+        import threading
+
+        error: list[BaseException] = []
+
+        def _target() -> None:
+            try:
+                self.on_enter_PLAN()
+            except Exception as exc:  # noqa: BLE001
+                error.append(exc)
+
+        thread = threading.Thread(target=_target, daemon=True, name="fsm")
+        thread.start()
+
+        for _ in range(max_steps):
+            if self.state == "DONE":
+                return
+            if error:
+                raise error[0]
+            time.sleep(0.1)
+
+        raise RuntimeError(
+            f"FSM did not reach DONE after {max_steps} checks. state={self.state}"
+        )
+
+    # ── logging ───────────────────────────────────────────────────────────────
 
     def log(self, msg: str) -> None:
-        print(f"[{self.state}] {msg}")
+        """State-level log line: timestamp  STATE  message."""
+        elapsed = time.monotonic() - self._start_time
+        state = self.state
+        col = _STATE_COL.get(state, "")
+        t = f"{_DIM}{elapsed:6.1f}s{_RST}"
+        s = f"{col}{_BOLD}{state:<{_W}}{_RST}"
+        print(f"  {t}  {s}  {msg}", flush=True)
 
-
-if __name__ == "__main__":
-    from observer import StateObserver
-
-    fsm = AgentFSM()
-    StateObserver(fsm).start()
-    fsm.run()
+    def log_detail(self, msg: str) -> None:
+        """Indented detail line below the current state log."""
+        elapsed = time.monotonic() - self._start_time
+        t = f"{_DIM}{elapsed:6.1f}s{_RST}"
+        pad = " " * _W
+        print(f"  {t}  {_DIM}{pad}  ↳ {_RST}{msg}", flush=True)
