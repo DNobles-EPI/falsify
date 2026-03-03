@@ -1,7 +1,7 @@
 [project]
-name = "nix-python-template"
+name = "falsify"
 version = "0.1.0"
-description = ""
+description = "AI coding agent test loop for scientific hypothesis testing"
 authors = [
     {name = "David",email = "david.nobles@sontric.org"}
 ]
@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "allure-pytest (>=2.15.3,<3.0.0)",
-    "pytest (>=9.0.2,<10.0.0)"
+    "graphviz (>=0.20)",
+    "pytest (>=9.0.2,<10.0.0)",
+    "transitions (>=0.9)",
 ]
 
 

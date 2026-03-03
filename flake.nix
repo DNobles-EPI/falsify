@@ -15,6 +15,7 @@
             poetry
             allure
             stdenv.cc.cc.lib  # needed b/c I'm keeping nix env deps separate from python deps (numpy needs this via poetry)
+            graphviz
           ];
         
           shellHook = ''
