@@ -9,35 +9,12 @@ import graphviz
 
 SUPPORTED_ENGINES = ("dot", "neato", "fdp", "sfdp", "circo", "twopi")
 
-STATES = [
-    "PLAN",
-    "DO",
-    "LOCAL_VERIFY",
-    "RUN_IMPACTED_TESTS",
-    "FIX_FAILING_TEST",
-    "COMMIT",
-    "PR_SYNC",
-    "WAIT_CI",
-    "TRIAGE_CI_FAIL",
-    "DONE",
-]
+# Import graph structure from the FSM — single source of truth
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from falsify import AgentFSM  # noqa: E402
 
-TRANSITIONS = [
-    ("PLAN",              "DO",                "todos_loaded"),
-    ("DO",               "LOCAL_VERIFY",      "todo_batch_done"),
-    ("LOCAL_VERIFY",     "RUN_IMPACTED_TESTS","git_dirty"),
-    ("LOCAL_VERIFY",     "PR_SYNC",           "git_clean"),
-    ("RUN_IMPACTED_TESTS","FIX_FAILING_TEST", "any_fail"),
-    ("RUN_IMPACTED_TESTS","COMMIT",           "all_pass"),
-    ("FIX_FAILING_TEST", "RUN_IMPACTED_TESTS","patch_applied"),
-    ("COMMIT",           "PLAN",              "committed"),
-    ("PR_SYNC",          "WAIT_CI",           "pr_created_or_updated"),
-    ("WAIT_CI",          "DONE",              "pr_approved"),
-    ("WAIT_CI",          "TRIAGE_CI_FAIL",    "ci_failed"),
-    ("WAIT_CI",          "WAIT_CI",           "checks_running"),
-    ("WAIT_CI",          "PLAN",              "ci_passed_not_approved"),
-    ("TRIAGE_CI_FAIL",   "PLAN",              "add_failure_to_todos"),
-]
+STATES = AgentFSM.states
+TRANSITIONS = AgentFSM.edges
 
 COLORS = {
     "PLAN":     "#cce5ff",

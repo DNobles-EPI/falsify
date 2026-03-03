@@ -89,41 +89,31 @@ class AgentFSM:
         "DONE",
     ]
 
+    # (source, dest, trigger) — single source of truth for graph structure.
+    # Consumed by observer.py and scripts/gen_diagram.py.
+    edges: List[Tuple[str, str, str]] = [
+        ("PLAN",               "DO",                "todos_loaded"),
+        ("DO",                 "LOCAL_VERIFY",      "todo_batch_done"),
+        ("LOCAL_VERIFY",       "RUN_IMPACTED_TESTS","git_dirty"),
+        ("LOCAL_VERIFY",       "PR_SYNC",           "git_clean"),
+        ("RUN_IMPACTED_TESTS", "FIX_FAILING_TEST",  "any_fail"),
+        ("RUN_IMPACTED_TESTS", "COMMIT",            "all_pass"),
+        ("FIX_FAILING_TEST",   "RUN_IMPACTED_TESTS","patch_applied"),
+        ("COMMIT",             "PLAN",              "committed"),
+        ("PR_SYNC",            "WAIT_CI",           "pr_created_or_updated"),
+        ("WAIT_CI",            "DONE",              "pr_approved"),
+        ("WAIT_CI",            "TRIAGE_CI_FAIL",    "ci_failed"),
+        ("WAIT_CI",            "WAIT_CI",           "checks_running"),
+        ("WAIT_CI",            "PLAN",              "ci_passed_not_approved"),
+        ("TRIAGE_CI_FAIL",     "PLAN",              "add_failure_to_todos"),
+    ]
+
     def __init__(self, ctx: Optional[Context] = None):
         self.ctx = ctx or Context()
 
         transitions = [
-            # PLAN -> DO
-            dict(trigger="todos_loaded", source="PLAN", dest="DO"),
-
-            # DO -> LOCAL_VERIFY
-            dict(trigger="todo_batch_done", source="DO", dest="LOCAL_VERIFY"),
-
-            # LOCAL_VERIFY branching
-            dict(trigger="git_dirty", source="LOCAL_VERIFY", dest="RUN_IMPACTED_TESTS"),
-            dict(trigger="git_clean", source="LOCAL_VERIFY", dest="PR_SYNC"),
-
-            # Tests -> fix/commit
-            dict(trigger="any_fail", source="RUN_IMPACTED_TESTS", dest="FIX_FAILING_TEST"),
-            dict(trigger="all_pass", source="RUN_IMPACTED_TESTS", dest="COMMIT"),
-
-            # Fix loops back to tests
-            dict(trigger="patch_applied", source="FIX_FAILING_TEST", dest="RUN_IMPACTED_TESTS"),
-
-            # Commit loops back to plan
-            dict(trigger="committed", source="COMMIT", dest="PLAN"),
-
-            # PR sync -> wait
-            dict(trigger="pr_created_or_updated", source="PR_SYNC", dest="WAIT_CI"),
-
-            # WAIT_CI branching
-            dict(trigger="pr_approved", source="WAIT_CI", dest="DONE"),
-            dict(trigger="ci_failed", source="WAIT_CI", dest="TRIAGE_CI_FAIL"),
-            dict(trigger="checks_running", source="WAIT_CI", dest="WAIT_CI"),
-            dict(trigger="ci_passed_not_approved", source="WAIT_CI", dest="PLAN"),
-
-            # CI fail triage -> plan
-            dict(trigger="add_failure_to_todos", source="TRIAGE_CI_FAIL", dest="PLAN"),
+            dict(trigger=t, source=s, dest=d)
+            for s, d, t in AgentFSM.edges
         ]
 
         self.machine = Machine(
@@ -535,5 +525,8 @@ class AgentFSM:
 
 
 if __name__ == "__main__":
+    from observer import StateObserver
+
     fsm = AgentFSM()
+    StateObserver(fsm).start()
     fsm.run()

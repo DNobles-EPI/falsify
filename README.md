@@ -41,7 +41,6 @@ make docs
 ```
 
 ## TODOs
-- HTTP live state observer
 - test suite
 - doctor helper
 - all cli integration and docs
