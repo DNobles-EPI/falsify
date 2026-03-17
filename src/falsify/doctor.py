@@ -26,67 +26,6 @@ _WARN  = f"{_YELLOW}⚠{_RST}"
 KEYRING_SERVICE = "falsify"
 
 
-# ── keyring helpers ───────────────────────────────────────────────────────────
-
-def _keyring_available() -> bool:
-    try:
-        import keyring  # noqa: F401
-        return True
-    except ImportError:
-        return False
-
-
-def get_api_key(name: str) -> Optional[str]:
-    """
-    Retrieve a stored API key.
-
-    Priority: environment variable → OS keyring.
-
-    The environment variable name is derived as ``<NAME>_API_KEY``
-    (upper-cased, hyphens replaced with underscores), e.g.
-    ``ANTHROPIC_API_KEY`` for name ``"anthropic"``.
-    """
-    env_var = f"{name.upper().replace('-', '_')}_API_KEY"
-    if val := os.environ.get(env_var):
-        return val
-
-    if _keyring_available():
-        try:
-            import keyring
-            return keyring.get_password(KEYRING_SERVICE, name)
-        except Exception:
-            pass
-
-    return None
-
-
-def set_api_key(name: str, value: str) -> bool:
-    """
-    Store *value* in the OS keyring under *name*.
-
-    Returns True on success, False if keyring is unavailable or storage failed.
-    """
-    if not _keyring_available():
-        return False
-    try:
-        import keyring
-        keyring.set_password(KEYRING_SERVICE, name, value)
-        return True
-    except Exception:
-        return False
-
-
-def delete_api_key(name: str) -> None:
-    """Remove *name* from the keyring (best-effort, silently ignores errors)."""
-    if not _keyring_available():
-        return
-    try:
-        import keyring
-        keyring.delete_password(KEYRING_SERVICE, name)
-    except Exception:
-        pass
-
-
 # ── check primitives ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -182,30 +121,28 @@ def check_pytest() -> Check:
         label="pytest",
         ok=ok,
         detail=out.splitlines()[0] if ok else "not found",
-        hint="pip install pytest" if not ok else "",
+        hint="poetry add pytest" if not ok else "",
     )
 
-
-def check_keyring() -> Check:
-    available = _keyring_available()
-    detail = "available" if available else "not installed"
-    if available:
-        try:
-            import keyring
-            backend = type(keyring.get_keyring()).__name__
-            detail = f"available ({backend})"
-        except Exception:
-            pass
+def check_codex() -> Check:
+    code, out = _run_cmd(["codex", "--version"])
+    ok = code == 0
     return Check(
-        label="keyring (secure storage)",
-        ok=available,
-        detail=detail,
-        hint=(
-            "pip install keyring  "
-            "(API keys fall back to environment variables without it)"
-        ) if not available else "",
+        label="codex",
+        ok=ok,
+        detail=out.splitlines()[0] if ok else "not found",
+        hint="Install codex CLI (https://developers.openai.com/codex/cli)\neg:\nnpm i -g @openai/codex" if not ok else "",
     )
 
+def check_codex_login() -> Check:
+    code, out = _run_cmd(["codex", "login", "status"])
+    ok = code == 0
+    return Check(
+        label="codex login",
+        ok=ok,
+        detail=out.splitlines()[0] if ok else "not found",
+        hint="need codex login" if not ok else "",
+    )
 
 # ── display ───────────────────────────────────────────────────────────────────
 
@@ -234,7 +171,8 @@ def run_doctor() -> bool:
         check_gh_auth(),
         check_graphviz(),
         check_pytest(),
-        check_keyring(),
+        check_codex(),
+        check_codex_login()
     ]
 
     for c in checks:
@@ -257,3 +195,6 @@ def run_doctor() -> bool:
     print()
 
     return all_ok
+
+if __name__ == "__main__":
+    run_doctor()
