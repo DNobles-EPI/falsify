@@ -29,8 +29,8 @@ def _add_run_args(p: argparse.ArgumentParser) -> None:
         help="Safety limit on FSM poll iterations (default: 10 000).",
     )
     p.add_argument(
-        "--feat-branch", default="feat/agent", metavar="BRANCH",
-        help="Feature branch name (default: feat/agent).",
+        "--feat-branch", default="falsify_agent", metavar="BRANCH",
+        help="Feature branch name (default: falsify_agent).",
     )
 
 
@@ -91,7 +91,7 @@ def main() -> None:
     # ── doctor ────────────────────────────────────────────────────────────────
     doctor_p = subparsers.add_parser(
         "doctor",
-        help="Check system prerequisites and configure API keys.",
+        help="Check system prerequisites.",
     )
     doctor_p.set_defaults(func=_cmd_doctor)
 
