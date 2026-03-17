@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 falsify = "falsify.cli:main"
+fals = "falsify.cli:main"
 
 [tool.poetry]
 packages = [{include = "falsify", from = "src"}]
