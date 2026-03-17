@@ -23,8 +23,6 @@ _TICK  = f"{_GREEN}✔{_RST}"
 _CROSS = f"{_RED}✘{_RST}"
 _WARN  = f"{_YELLOW}⚠{_RST}"
 
-KEYRING_SERVICE = "falsify"
-
 
 # ── check primitives ──────────────────────────────────────────────────────────
 
