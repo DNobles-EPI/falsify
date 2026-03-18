@@ -129,8 +129,10 @@ def check_codex() -> Check:
         label="codex",
         ok=ok,
         detail=out.splitlines()[0] if ok else "not found",
-        hint="Install codex CLI (https://developers.openai.com/codex/cli)\neg:\nnpm i -g @openai/codex" if not ok else "",
+        hint="Install codex CLI" if not ok else "",
     )
+    # # install codex cli via npm
+    # npm i -g @openai/codex
 
 def check_codex_login() -> Check:
     code, out = _run_cmd(["codex", "login", "status"])
@@ -141,6 +143,37 @@ def check_codex_login() -> Check:
         detail=out.splitlines()[0] if ok else "not found",
         hint="need codex login" if not ok else "",
     )
+
+def check_nodejs() -> Check:
+    code, out = _run_cmd(["node", "-v"])
+    ok = code == 0
+    return Check(
+        label="Node.js",
+        ok=ok,
+        detail=out.splitlines()[0] if ok else "not found",
+        hint="check nodejs installation" if not ok else "",
+        # # install curl
+        # sudo apt install curl -y
+        # # install Node.js
+        # curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+        # sudo apt install nodejs -y
+    )
+
+def check_npm() -> Check:
+    code, out = _run_cmd(["npm", "-v"])
+    ok = code == 0
+    return Check(
+        label="npm",
+        ok=ok,
+        detail=out.splitlines()[0] if ok else "not found",
+        hint="check npm installation" if not ok else "",
+        # # install curl
+        # sudo apt install curl -y
+        # # install Node.js
+        # curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+        # sudo apt install nodejs -y
+    )
+
 
 # ── display ───────────────────────────────────────────────────────────────────
 
@@ -164,6 +197,8 @@ def run_doctor() -> bool:
 
     checks: list[Check] = [
         check_python(),
+        check_nodejs(),
+        check_npm(),
         check_git(),
         check_gh_installed(),
         check_gh_auth(),
