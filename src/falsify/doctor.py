@@ -152,8 +152,6 @@ def check_nodejs() -> Check:
         ok=ok,
         detail=out.splitlines()[0] if ok else "not found",
         hint="check nodejs installation" if not ok else "",
-        # # install curl
-        # sudo apt install curl -y
         # # install Node.js
         # curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
         # sudo apt install nodejs -y
@@ -167,11 +165,21 @@ def check_npm() -> Check:
         ok=ok,
         detail=out.splitlines()[0] if ok else "not found",
         hint="check npm installation" if not ok else "",
-        # # install curl
-        # sudo apt install curl -y
         # # install Node.js
         # curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
         # sudo apt install nodejs -y
+    )
+
+def check_curl() -> Check:
+    code, out = _run_cmd(["curl", "-V"])
+    ok = code == 0
+    return Check(
+        label="curl",
+        ok=ok,
+        detail=out.splitlines()[0] if ok else "not found",
+        hint="check curl installation" if not ok else "",
+        # # install curl
+        # sudo apt install curl -y
     )
 
 
@@ -197,6 +205,7 @@ def run_doctor() -> bool:
 
     checks: list[Check] = [
         check_python(),
+        check_curl(),
         check_nodejs(),
         check_npm(),
         check_git(),
