@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata
+import os
 import sys
 
 # Subcommand names — used for backwards-compat defaulting below.
@@ -29,8 +30,8 @@ def _add_run_args(p: argparse.ArgumentParser) -> None:
         help="Safety limit on FSM poll iterations (default: 10 000).",
     )
     p.add_argument(
-        "--feat-branch", default="feat/agent", metavar="BRANCH",
-        help="Feature branch name (default: feat/agent).",
+        "--feat-branch", default="falsify_agent", metavar="BRANCH",
+        help="Feature branch name (default: falsify_agent).",
     )
 
 
@@ -44,7 +45,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
     from falsify import AgentFSM, Context
     from falsify.observer import StateObserver
 
-    print(f"\n  falsify {version}\n")
+    print(f"\n  {args.prog_name} {version}\n")
 
     ctx = Context(feat_branch=args.feat_branch)
     fsm = AgentFSM(ctx=ctx)
@@ -70,12 +71,14 @@ def _cmd_doctor(_args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    prog_name = os.path.basename(sys.argv[0]) or "falsify"
+
     # Backwards-compat: bare `falsify [--flags]` (no subcommand) → `falsify run [--flags]`.
     if len(sys.argv) < 2 or sys.argv[1] not in _SUBCOMMANDS:
         sys.argv.insert(1, "run")
 
     parser = argparse.ArgumentParser(
-        prog="falsify",
+        prog=prog_name,
         description="AI coding agent orchestration loop.",
     )
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
@@ -91,11 +94,12 @@ def main() -> None:
     # ── doctor ────────────────────────────────────────────────────────────────
     doctor_p = subparsers.add_parser(
         "doctor",
-        help="Check system prerequisites and configure API keys.",
+        help="Check system prerequisites.",
     )
     doctor_p.set_defaults(func=_cmd_doctor)
 
     args = parser.parse_args()
+    args.prog_name = prog_name
     args.func(args)
 
 

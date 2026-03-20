@@ -11,13 +11,13 @@ requires-python = ">=3.12"
 dependencies = [
     "allure-pytest (>=2.15.3,<3.0.0)",
     "graphviz (>=0.20)",
-    "keyring (>=25.0)",
     "pytest (>=9.0.2,<10.0.0)",
     "transitions (>=0.9)",
 ]
 
 [project.scripts]
 falsify = "falsify.cli:main"
+fals = "falsify.cli:main"
 
 [tool.poetry]
 packages = [{include = "falsify", from = "src"}]
