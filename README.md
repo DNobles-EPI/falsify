@@ -1,9 +1,13 @@
 # falsify
 
-AI coding agent test loop for scientific hypothesis testing.
-
 `falsify` is a minimal FSM orchestrator that drives an AI coding agent through a continuous improvement loop: plan → do → test → fix → commit → PR → CI → repeat.
-
+  
+It's an AI coding agent for test driven development.  
+  
+The objective is to break things, figure out what happened, and fix it. 
+  
+[Antifragile](https://en.wikipedia.org/wiki/Antifragile_(book))  
+  
 ## State Machine
 
 ![State Machine](docs/statemachine.png)
