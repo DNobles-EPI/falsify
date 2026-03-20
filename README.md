@@ -11,8 +11,8 @@ The test state is foundational.
 The goal of the tests is to break things, figure out what happened, and fix it. 
   
 Continuously building structured execution and validation.  
-  
-See [Antifragile](https://en.wikipedia.org/wiki/Antifragile_(book)) for the philosophy behind this approach.
+
+_In computer science, there is a structured proposal for an "Antifragile Software Manifesto", to react to traditional system designs. The major idea is to develop antifragility by design, building a system which improves from environmental inputs._ [ref: Antifragile](https://en.wikipedia.org/wiki/Antifragile_(book))
   
 ## State Machine
 
