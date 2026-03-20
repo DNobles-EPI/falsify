@@ -13,6 +13,7 @@ from falsify.shell import (
     build_codex_prompt,
     current_branch_name,
     gh,
+    gh_graphql_json,
     gh_json_cmd,
     github_owner_repo,
     github_repo,
@@ -62,7 +63,7 @@ class AgentFSM:
         ("WAIT_CI", "DONE", "pr_approved"),
         ("WAIT_CI", "TRIAGE_CI_FAIL", "ci_failed"),
         ("WAIT_CI", "WAIT_CI", "checks_running"),
-        ("WAIT_CI", "PLAN", "ci_passed_not_approved"),
+        ("WAIT_CI", "WAIT_CI", "ci_passed_not_approved"),
         ("TRIAGE_CI_FAIL", "PLAN", "add_failure_to_todos"),
     ]
 
@@ -170,6 +171,7 @@ class AgentFSM:
             return
 
         if self.ci_passed_status() and not self.pr_is_approved():
+            time.sleep(10)
             self.ci_passed_not_approved()
 
     def on_enter_TRIAGE_CI_FAIL(self):
@@ -185,10 +187,41 @@ class AgentFSM:
         if not self.ctx.pr_id:
             return
 
-        data = gh_json_cmd(
-            "pr", "view", self.ctx.pr_id, "-R", github_repo(), "--json", "reviewThreads"
+        owner, repo_name = github_owner_repo()
+        data = gh_graphql_json(
+            """
+            query($owner:String!, $repo:String!, $number:Int!) {
+              repository(owner:$owner, name:$repo) {
+                pullRequest(number:$number) {
+                  reviewThreads(first:100) {
+                    nodes {
+                      isResolved
+                      isOutdated
+                      comments(first:100) {
+                        nodes {
+                          body
+                          path
+                          line
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """,
+            owner=owner,
+            repo=repo_name,
+            number=self.ctx.pr_id,
         )
-        for thread in data.get("reviewThreads", []):
+        threads = (
+            data.get("data", {})
+            .get("repository", {})
+            .get("pullRequest", {})
+            .get("reviewThreads", {})
+            .get("nodes", [])
+        )
+        for thread in threads:
             if thread.get("isResolved") or thread.get("isOutdated"):
                 continue
             nodes = thread.get("comments", {}).get("nodes", [])
@@ -431,7 +464,7 @@ class AgentFSM:
         check_runs = checks.get("check_runs", [])
 
         if not check_runs:
-            self.ctx.ci_status = "running"
+            self.ctx.ci_status = "pass"
             return
 
         any_in_progress = any(cr["status"] != "completed" for cr in check_runs)

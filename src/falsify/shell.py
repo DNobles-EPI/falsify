@@ -46,6 +46,13 @@ def gh_json_cmd(*args: str) -> Any:
     return sh_json(["gh", *args])
 
 
+def gh_graphql_json(query: str, **variables: str) -> Any:
+    cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
+    for key, value in variables.items():
+        cmd.extend(["-F", f"{key}={value}"])
+    return sh_json(cmd)
+
+
 def require_clean_tooling() -> None:
     sh(["git", "--version"])
     sh(["gh", "--version"])
