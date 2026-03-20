@@ -13,6 +13,7 @@ from falsify.shell import (
     build_codex_prompt,
     current_branch_name,
     gh,
+    gh_graphql_json,
     gh_json_cmd,
     github_owner_repo,
     github_repo,
@@ -185,10 +186,41 @@ class AgentFSM:
         if not self.ctx.pr_id:
             return
 
-        data = gh_json_cmd(
-            "pr", "view", self.ctx.pr_id, "-R", github_repo(), "--json", "reviewThreads"
+        owner, repo_name = github_owner_repo()
+        data = gh_graphql_json(
+            """
+            query($owner:String!, $repo:String!, $number:Int!) {
+              repository(owner:$owner, name:$repo) {
+                pullRequest(number:$number) {
+                  reviewThreads(first:100) {
+                    nodes {
+                      isResolved
+                      isOutdated
+                      comments(first:100) {
+                        nodes {
+                          body
+                          path
+                          line
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """,
+            owner=owner,
+            repo=repo_name,
+            number=self.ctx.pr_id,
         )
-        for thread in data.get("reviewThreads", []):
+        threads = (
+            data.get("data", {})
+            .get("repository", {})
+            .get("pullRequest", {})
+            .get("reviewThreads", {})
+            .get("nodes", [])
+        )
+        for thread in threads:
             if thread.get("isResolved") or thread.get("isOutdated"):
                 continue
             nodes = thread.get("comments", {}).get("nodes", [])

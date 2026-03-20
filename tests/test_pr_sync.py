@@ -62,3 +62,47 @@ def test_poll_ci_marks_no_checks_as_pass(monkeypatch) -> None:
 
     assert fsm.ctx.ci_status == "pass"
     assert fsm.ctx.approved is False
+
+
+def test_load_todos_uses_graphql_review_threads(monkeypatch) -> None:
+    fsm = AgentFSM(Context())
+    fsm.ctx.pr_id = "3"
+
+    monkeypatch.setattr("falsify.fsm.github_owner_repo", lambda: ("owner", "repo"))
+
+    def fake_gh_graphql_json(query: str, **variables: str):
+        assert "reviewThreads" in query
+        assert variables == {"owner": "owner", "repo": "repo", "number": "3"}
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "isResolved": False,
+                                    "isOutdated": False,
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "body": "please fix this",
+                                                "path": "src/falsify/fsm.py",
+                                                "line": 123,
+                                            }
+                                        ]
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setattr("falsify.fsm.gh_graphql_json", fake_gh_graphql_json)
+
+    fsm.load_todos()
+
+    assert len(fsm.ctx.todos) == 1
+    assert fsm.ctx.todos[0].kind == "review_comment"
+    assert fsm.ctx.todos[0].payload["path"] == "src/falsify/fsm.py"
