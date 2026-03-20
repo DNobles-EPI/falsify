@@ -68,11 +68,9 @@ def pick_pr_base_branch() -> str:
     )
 
 
-def current_branch_name() -> str:
+def current_branch_name() -> Optional[str]:
     branch = git("branch", "--show-current").strip()
-    if not branch:
-        raise RuntimeError("Cannot sync PR from detached HEAD.")
-    return branch
+    return branch or None
 
 
 def parse_pr_number_from_url(url: str) -> Optional[str]:
@@ -92,7 +90,7 @@ def build_codex_prompt(task: str) -> str:
 def github_repo() -> str:
     url = git("remote", "get-url", "origin").strip()
     patterns = (
-        r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/.]+?)(?:\.git)?$",
+        r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$",
     )
     for pattern in patterns:
         match = re.search(pattern, url)
