@@ -14,6 +14,8 @@ Continuously building structured execution and validation.
 
 _In computer science, there is a structured proposal for an "Antifragile Software Manifesto", to react to traditional system designs. The major idea is to develop antifragility by design, building a system which improves from environmental inputs._ [ref: Antifragile](https://en.wikipedia.org/wiki/Antifragile_(book))
   
+[Antifragile Manifesto](https://www.danielrusso.org/files/2016Antifragile_Manifesto.pdf)
+   
 ## State Machine
 
 ![State Machine](docs/statemachine.png)
