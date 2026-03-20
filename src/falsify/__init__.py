@@ -49,6 +49,14 @@ def sh(cmd: List[str], cwd: Optional[str] = None, check: bool = True) -> subproc
         rendered = subprocess.list2cmdline(exc.cmd)
         raise RuntimeError(f"{rendered}: {detail}") from exc
 
+
+def sh_stream(cmd: List[str], cwd: Optional[str] = None) -> None:
+    try:
+        subprocess.run(cmd, cwd=cwd, check=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        rendered = subprocess.list2cmdline(exc.cmd)
+        raise RuntimeError(f"{rendered}: exit status {exc.returncode}") from exc
+
 def sh_json(cmd: List[str], cwd: Optional[str] = None) -> Any:
     p = sh(cmd, cwd=cwd, check=True)
     return json.loads(p.stdout)
@@ -365,7 +373,8 @@ class AgentFSM:
         Invoke Codex CLI in non-interactive mode against the current repo.
         """
         prompt = build_codex_prompt(task)
-        sh([
+        self.log_detail("launching codex…")
+        sh_stream([
             "codex",
             "exec",
             "--full-auto",
