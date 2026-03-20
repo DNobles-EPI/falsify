@@ -40,3 +40,25 @@ def test_github_repo_accepts_dotted_repository_names(monkeypatch) -> None:
     )
 
     assert github_repo() == "example/my.repo"
+
+
+def test_poll_ci_marks_no_checks_as_pass(monkeypatch) -> None:
+    fsm = AgentFSM(Context())
+    fsm.ctx.pr_id = "2"
+
+    monkeypatch.setattr("falsify.fsm.github_repo", lambda: "owner/repo")
+    monkeypatch.setattr("falsify.fsm.github_owner_repo", lambda: ("owner", "repo"))
+
+    def fake_gh_json_cmd(*args: str):
+        if args[:2] == ("pr", "view"):
+            return {"headRefOid": "abc123", "reviewDecision": ""}
+        if args[:1] == ("api",):
+            return {"check_runs": []}
+        raise AssertionError(f"unexpected gh_json_cmd call: {args}")
+
+    monkeypatch.setattr("falsify.fsm.gh_json_cmd", fake_gh_json_cmd)
+
+    fsm.poll_ci()
+
+    assert fsm.ctx.ci_status == "pass"
+    assert fsm.ctx.approved is False

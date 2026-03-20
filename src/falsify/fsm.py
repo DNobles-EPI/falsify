@@ -431,7 +431,7 @@ class AgentFSM:
         check_runs = checks.get("check_runs", [])
 
         if not check_runs:
-            self.ctx.ci_status = "running"
+            self.ctx.ci_status = "pass"
             return
 
         any_in_progress = any(cr["status"] != "completed" for cr in check_runs)
