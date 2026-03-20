@@ -1,6 +1,6 @@
 from falsify import AgentFSM, Context
 from falsify.shell import github_repo
-from falsify.types import Todo
+from falsify.types import PendingReviewThread, Todo
 
 
 def test_pr_sync_uses_head_push_when_checkout_is_detached(monkeypatch) -> None:
@@ -128,6 +128,7 @@ def test_load_todos_uses_graphql_review_threads(monkeypatch) -> None:
                                     "comments": {
                                         "nodes": [
                                             {
+                                                "databaseId": 42,
                                                 "body": "please fix this",
                                                 "path": "src/falsify/fsm.py",
                                                 "line": 123,
@@ -149,16 +150,17 @@ def test_load_todos_uses_graphql_review_threads(monkeypatch) -> None:
     assert len(fsm.ctx.todos) == 1
     assert fsm.ctx.todos[0].kind == "review_comment"
     assert fsm.ctx.todos[0].payload["thread_id"] == "thread-1"
+    assert fsm.ctx.todos[0].payload["comment_id"] == 42
     assert fsm.ctx.todos[0].payload["path"] == "src/falsify/fsm.py"
 
 
-def test_do_todo_tracks_resolvable_review_thread(monkeypatch) -> None:
+def test_do_todo_tracks_review_thread_reply(monkeypatch) -> None:
     fsm = AgentFSM(Context())
     todo = Todo(
         kind="review_comment",
         payload={
             "thread_id": "thread-9",
-            "viewer_can_resolve": True,
+            "comment_id": 99,
             "body": "please fix this",
             "path": "src/falsify/fsm.py",
             "line": 123,
@@ -169,19 +171,46 @@ def test_do_todo_tracks_resolvable_review_thread(monkeypatch) -> None:
 
     fsm.do_todo(todo)
 
-    assert fsm.ctx.pending_review_thread_ids == ["thread-9"]
+    assert fsm.ctx.pending_review_threads == [
+        PendingReviewThread(
+            thread_id="thread-9",
+            comment_id=99,
+            reply_body="Addressed in the latest automated commit.",
+        )
+    ]
 
 
-def test_on_enter_commit_resolves_pending_review_threads(monkeypatch) -> None:
-    fsm = AgentFSM(Context(pending_review_thread_ids=["thread-2", "thread-2"]))
-    calls: list[str] = []
+def test_on_enter_commit_replies_and_resolves_pending_review_threads(monkeypatch) -> None:
+    fsm = AgentFSM(
+        Context(
+            pr_id="3",
+            pending_review_threads=[
+                PendingReviewThread(
+                    thread_id="thread-2",
+                    comment_id=88,
+                    reply_body="Addressed in the latest automated commit.",
+                ),
+                PendingReviewThread(
+                    thread_id="thread-2",
+                    comment_id=88,
+                    reply_body="Addressed in the latest automated commit.",
+                ),
+            ],
+        )
+    )
+    calls: list[tuple[str, ...] | str] = []
     events: list[str] = []
 
     monkeypatch.setattr(fsm, "git_commit", lambda: calls.append("commit"))
+    monkeypatch.setattr("falsify.fsm.github_repo", lambda: "owner/repo")
+
+    def fake_gh_json_cmd(*args: str):
+        calls.append(tuple(args))
+        return {"id": 101}
 
     def fake_gh_graphql_json(query: str, **variables: str):
         assert "resolveReviewThread" in query
-        calls.append(variables["threadId"])
+        calls.append(("resolve", variables["threadId"]))
         return {
             "data": {
                 "resolveReviewThread": {
@@ -190,15 +219,27 @@ def test_on_enter_commit_resolves_pending_review_threads(monkeypatch) -> None:
             }
         }
 
+    monkeypatch.setattr("falsify.fsm.gh_json_cmd", fake_gh_json_cmd)
     monkeypatch.setattr("falsify.fsm.gh_graphql_json", fake_gh_graphql_json)
     monkeypatch.setattr(fsm, "log_detail", lambda msg: None)
     monkeypatch.setattr(fsm, "committed", lambda: events.append("committed"))
 
     fsm.on_enter_COMMIT()
 
-    assert calls == ["commit", "thread-2"]
+    assert calls == [
+        "commit",
+        (
+            "api",
+            "repos/owner/repo/pulls/3/comments",
+            "-f",
+            "body=Addressed in the latest automated commit.",
+            "-F",
+            "in_reply_to=88",
+        ),
+        ("resolve", "thread-2"),
+    ]
     assert events == ["committed"]
-    assert fsm.ctx.pending_review_thread_ids == []
+    assert fsm.ctx.pending_review_threads == []
 
 
 def test_wait_ci_keeps_polling_when_ci_passed_but_not_approved(monkeypatch) -> None:

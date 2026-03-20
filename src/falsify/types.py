@@ -21,9 +21,16 @@ class Test:
 
 
 @dataclass
+class PendingReviewThread:
+    thread_id: str
+    comment_id: int
+    reply_body: str
+
+
+@dataclass
 class Context:
     todos: list[Todo] = field(default_factory=list)
-    pending_review_thread_ids: list[str] = field(default_factory=list)
+    pending_review_threads: list[PendingReviewThread] = field(default_factory=list)
     git_dirty: bool = False
     impacted_tests: list[Test] = field(default_factory=list)
     failing: list[tuple[Test, str]] = field(default_factory=list)

@@ -25,7 +25,7 @@ from falsify.shell import (
     sh,
     sh_stream,
 )
-from falsify.types import Context, Test, Todo
+from falsify.types import Context, PendingReviewThread, Test, Todo
 
 
 class AgentFSM:
@@ -224,6 +224,7 @@ class AgentFSM:
                       viewerCanResolve
                       comments(first:100) {
                         nodes {
+                          databaseId
                           body
                           path
                           line
@@ -258,6 +259,7 @@ class AgentFSM:
                 payload={
                     "thread_id": thread.get("id"),
                     "viewer_can_resolve": bool(thread.get("viewerCanResolve")),
+                    "comment_id": first.get("databaseId"),
                     "body": first.get("body", ""),
                     "path": first.get("path"),
                     "line": first.get("line"),
@@ -289,8 +291,15 @@ class AgentFSM:
             location = f"{path}:{line}" if path and line else path or "(general)"
             self._invoke_agent(f"Address review comment at {location}:\n\n{body}")
             thread_id = todo.payload.get("thread_id")
-            if thread_id and todo.payload.get("viewer_can_resolve"):
-                self.ctx.pending_review_thread_ids.append(str(thread_id))
+            comment_id = todo.payload.get("comment_id")
+            if thread_id and comment_id:
+                self.ctx.pending_review_threads.append(
+                    PendingReviewThread(
+                        thread_id=str(thread_id),
+                        comment_id=int(comment_id),
+                        reply_body="Addressed in the latest automated commit.",
+                    )
+                )
         elif todo.kind == "ci_failure":
             check = todo.payload.get("check", "CI")
             reason = todo.payload.get("reason")
@@ -410,12 +419,32 @@ class AgentFSM:
         self.log_detail(summary)
         self.ctx.git_dirty = False
 
+    def reply_to_review_comment(self, comment_id: int, body: str) -> None:
+        if self.ctx.pr_id is None:
+            raise RuntimeError("Cannot reply to a review comment without a PR number.")
+        repo = github_repo()
+        gh_json_cmd(
+            "api",
+            f"repos/{repo}/pulls/{self.ctx.pr_id}/comments",
+            "-f",
+            f"body={body}",
+            "-F",
+            f"in_reply_to={comment_id}",
+        )
+
     def resolve_pending_review_threads(self) -> None:
-        thread_ids = list(dict.fromkeys(self.ctx.pending_review_thread_ids))
-        if not thread_ids:
+        pending_threads = list({
+            (item.thread_id, item.comment_id, item.reply_body): item
+            for item in self.ctx.pending_review_threads
+        }.values())
+        if not pending_threads:
             return
 
-        for thread_id in thread_ids:
+        for pending in pending_threads:
+            self.reply_to_review_comment(pending.comment_id, pending.reply_body)
+            self.log_detail(
+                f"replied to review comment {pending.comment_id} on thread {pending.thread_id}"
+            )
             gh_graphql_json(
                 """
                 mutation($threadId:ID!) {
@@ -427,11 +456,11 @@ class AgentFSM:
                   }
                 }
                 """,
-                threadId=thread_id,
+                threadId=pending.thread_id,
             )
-            self.log_detail(f"resolved review thread {thread_id}")
+            self.log_detail(f"resolved review thread {pending.thread_id}")
 
-        self.ctx.pending_review_thread_ids.clear()
+        self.ctx.pending_review_threads.clear()
 
     def pr_sync_to_dev(self) -> None:
         require_clean_tooling()
