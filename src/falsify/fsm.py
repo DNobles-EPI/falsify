@@ -430,14 +430,32 @@ class AgentFSM:
         title = f"{head}: automated updates"
         body = "Automated changes by coding agent.\n\n- Local tests: impacted subset\n- CI: GitHub Actions\n"
 
-        url = gh(
-            "pr", "create",
-            "-R", repo,
-            "--base", base,
-            "--head", head,
-            "--title", title,
-            "--body", body,
-        ).strip()
+        try:
+            url = gh(
+                "pr", "create",
+                "-R", repo,
+                "--base", base,
+                "--head", head,
+                "--title", title,
+                "--body", body,
+            ).strip()
+        except RuntimeError as exc:
+            if "No commits between" not in str(exc):
+                raise
+
+            prs = gh_json_cmd(
+                "pr", "list",
+                "-R", repo,
+                "--head", head,
+                "--state", "merged",
+                "--json", "number,url,headRefName,baseRefName",
+            )
+            prs = [pr for pr in prs if pr["baseRefName"] == base]
+            if prs:
+                self.ctx.pr_id = str(prs[0]["number"])
+                self.log_detail(f"branch already merged via PR #{self.ctx.pr_id}")
+                return
+            raise
 
         prs = gh_json_cmd(
             "pr", "list",

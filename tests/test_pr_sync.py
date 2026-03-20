@@ -33,6 +33,46 @@ def test_pr_sync_uses_head_push_when_checkout_is_detached(monkeypatch) -> None:
     assert fsm.ctx.pr_id == "1"
 
 
+def test_pr_sync_reuses_latest_merged_pr_when_no_commits_between_branches(monkeypatch) -> None:
+    fsm = AgentFSM(Context(feat_branch="feat/agent"))
+    calls: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr("falsify.fsm.require_clean_tooling", lambda: None)
+    monkeypatch.setattr("falsify.fsm.pick_pr_base_branch", lambda: "develop")
+    monkeypatch.setattr("falsify.fsm.current_branch_name", lambda: "feat/agent")
+    monkeypatch.setattr("falsify.fsm.github_repo", lambda: "owner/repo")
+    monkeypatch.setattr(fsm, "log_detail", lambda msg: None)
+
+    def fake_sh(cmd: list[str], cwd=None, check: bool = True):
+        calls.append(tuple(cmd))
+
+        class Result:
+            stdout = ""
+
+        return Result()
+
+    def fake_gh(*args: str):
+        raise RuntimeError("gh pr create: No commits between develop and feat/agent")
+
+    def fake_gh_json_cmd(*args: str):
+        if args[:2] == ("pr", "list") and "--state" in args:
+            state = args[args.index("--state") + 1]
+            if state == "open":
+                return []
+            if state == "merged":
+                return [{"number": 4, "baseRefName": "develop"}]
+        raise AssertionError(f"unexpected gh_json_cmd call: {args}")
+
+    monkeypatch.setattr("falsify.fsm.sh", fake_sh)
+    monkeypatch.setattr("falsify.fsm.gh", fake_gh)
+    monkeypatch.setattr("falsify.fsm.gh_json_cmd", fake_gh_json_cmd)
+
+    fsm.pr_sync_to_dev()
+
+    assert ("git", "push", "-u", "origin", "feat/agent") in calls
+    assert fsm.ctx.pr_id == "4"
+
+
 def test_github_repo_accepts_dotted_repository_names(monkeypatch) -> None:
     monkeypatch.setattr(
         "falsify.shell.git",
