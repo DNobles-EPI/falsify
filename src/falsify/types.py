@@ -28,5 +28,7 @@ class Context:
     pr_id: Optional[str] = None
     ci_status: CiStatus = None
     approved: bool = False
+    pr_merged: bool = False
+    pr_closed: bool = False
     feat_branch: str = "feat/agent"
     force_full_suite_next: bool = False
