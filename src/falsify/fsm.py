@@ -63,7 +63,7 @@ class AgentFSM:
         ("WAIT_CI", "DONE", "pr_approved"),
         ("WAIT_CI", "TRIAGE_CI_FAIL", "ci_failed"),
         ("WAIT_CI", "WAIT_CI", "checks_running"),
-        ("WAIT_CI", "PLAN", "ci_passed_not_approved"),
+        ("WAIT_CI", "WAIT_CI", "ci_passed_not_approved"),
         ("TRIAGE_CI_FAIL", "PLAN", "add_failure_to_todos"),
     ]
 
@@ -171,6 +171,7 @@ class AgentFSM:
             return
 
         if self.ci_passed_status() and not self.pr_is_approved():
+            time.sleep(10)
             self.ci_passed_not_approved()
 
     def on_enter_TRIAGE_CI_FAIL(self):

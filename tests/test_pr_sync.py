@@ -106,3 +106,23 @@ def test_load_todos_uses_graphql_review_threads(monkeypatch) -> None:
     assert len(fsm.ctx.todos) == 1
     assert fsm.ctx.todos[0].kind == "review_comment"
     assert fsm.ctx.todos[0].payload["path"] == "src/falsify/fsm.py"
+
+
+def test_wait_ci_keeps_polling_when_ci_passed_but_not_approved(monkeypatch) -> None:
+    fsm = AgentFSM(Context())
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        fsm,
+        "poll_ci",
+        lambda: (
+            setattr(fsm.ctx, "ci_status", "pass"),
+            setattr(fsm.ctx, "approved", False),
+        ),
+    )
+    monkeypatch.setattr("falsify.fsm.time.sleep", lambda _: None)
+    monkeypatch.setattr(fsm, "ci_passed_not_approved", lambda: events.append("wait"))
+
+    fsm.on_enter_WAIT_CI()
+
+    assert events == ["wait"]
