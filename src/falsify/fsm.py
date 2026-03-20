@@ -63,6 +63,7 @@ class AgentFSM:
         ("PR_SYNC", "WAIT_CI", "pr_created_or_updated"),
         ("WAIT_CI", "DONE", "pr_approved"),
         ("WAIT_CI", "TRIAGE_CI_FAIL", "ci_failed"),
+        ("WAIT_CI", "PLAN", "review_comments_pending"),
         ("WAIT_CI", "WAIT_CI", "checks_running"),
         ("WAIT_CI", "WAIT_CI", "ci_passed_not_approved"),
         ("TRIAGE_CI_FAIL", "PLAN", "add_failure_to_todos"),
@@ -151,6 +152,7 @@ class AgentFSM:
     def on_enter_COMMIT(self):
         self.log("staging and committing…")
         self.git_commit()
+        self.resolve_pending_review_threads()
         self.committed()
 
     def on_enter_PR_SYNC(self):
@@ -185,6 +187,10 @@ class AgentFSM:
             return
 
         if self.ci_passed_status() and not self.pr_is_approved():
+            self.load_todos()
+            if self.has_todos():
+                self.review_comments_pending()
+                return
             time.sleep(10)
             self.ci_passed_not_approved()
 
@@ -212,8 +218,10 @@ class AgentFSM:
                 pullRequest(number:$number) {
                   reviewThreads(first:100) {
                     nodes {
+                      id
                       isResolved
                       isOutdated
+                      viewerCanResolve
                       comments(first:100) {
                         nodes {
                           body
@@ -248,6 +256,8 @@ class AgentFSM:
             self.ctx.todos.append(Todo(
                 kind="review_comment",
                 payload={
+                    "thread_id": thread.get("id"),
+                    "viewer_can_resolve": bool(thread.get("viewerCanResolve")),
                     "body": first.get("body", ""),
                     "path": first.get("path"),
                     "line": first.get("line"),
@@ -278,6 +288,9 @@ class AgentFSM:
             line = todo.payload.get("line")
             location = f"{path}:{line}" if path and line else path or "(general)"
             self._invoke_agent(f"Address review comment at {location}:\n\n{body}")
+            thread_id = todo.payload.get("thread_id")
+            if thread_id and todo.payload.get("viewer_can_resolve"):
+                self.ctx.pending_review_thread_ids.append(str(thread_id))
         elif todo.kind == "ci_failure":
             check = todo.payload.get("check", "CI")
             reason = todo.payload.get("reason")
@@ -396,6 +409,29 @@ class AgentFSM:
         summary = stat.splitlines()[-1] if stat else "nothing staged"
         self.log_detail(summary)
         self.ctx.git_dirty = False
+
+    def resolve_pending_review_threads(self) -> None:
+        thread_ids = list(dict.fromkeys(self.ctx.pending_review_thread_ids))
+        if not thread_ids:
+            return
+
+        for thread_id in thread_ids:
+            gh_graphql_json(
+                """
+                mutation($threadId:ID!) {
+                  resolveReviewThread(input:{threadId:$threadId}) {
+                    thread {
+                      id
+                      isResolved
+                    }
+                  }
+                }
+                """,
+                threadId=thread_id,
+            )
+            self.log_detail(f"resolved review thread {thread_id}")
+
+        self.ctx.pending_review_thread_ids.clear()
 
     def pr_sync_to_dev(self) -> None:
         require_clean_tooling()

@@ -23,6 +23,7 @@ class Test:
 @dataclass
 class Context:
     todos: list[Todo] = field(default_factory=list)
+    pending_review_thread_ids: list[str] = field(default_factory=list)
     git_dirty: bool = False
     impacted_tests: list[Test] = field(default_factory=list)
     failing: list[tuple[Test, str]] = field(default_factory=list)
