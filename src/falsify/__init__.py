@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import time
@@ -39,7 +40,14 @@ _W = 22  # state-name column width
 # ── shell helpers ─────────────────────────────────────────────────────────────
 
 def sh(cmd: List[str], cwd: Optional[str] = None, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=cwd, check=check, text=True, capture_output=True)
+    try:
+        return subprocess.run(cmd, cwd=cwd, check=check, text=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        stdout = (exc.stdout or "").strip()
+        detail = stderr or stdout or f"exit status {exc.returncode}"
+        rendered = subprocess.list2cmdline(exc.cmd)
+        raise RuntimeError(f"{rendered}: {detail}") from exc
 
 def sh_json(cmd: List[str], cwd: Optional[str] = None) -> Any:
     p = sh(cmd, cwd=cwd, check=True)
@@ -82,6 +90,20 @@ def current_branch_name() -> str:
     if not branch:
         raise RuntimeError("Cannot sync PR from detached HEAD.")
     return branch
+
+
+def parse_pr_number_from_url(url: str) -> Optional[str]:
+    match = re.search(r"/pull/(\d+)(?:/|$)", url.strip())
+    return match.group(1) if match else None
+
+
+def build_codex_prompt(task: str) -> str:
+    return (
+        "You are operating inside the current git repository as an automated coding agent.\n"
+        "Read the codebase, make the smallest correct changes to complete the task, and edit files directly.\n"
+        "After changes, briefly summarize what you changed.\n\n"
+        f"Task:\n{task}\n"
+    )
 
 
 # ── domain types ──────────────────────────────────────────────────────────────
@@ -340,11 +362,17 @@ class AgentFSM:
 
     def _invoke_agent(self, task: str) -> None:
         """
-        Integration point: call your AI coding agent here.
-        Example using Claude Code CLI:
-            sh(["claude", "--print", task])
+        Invoke Codex CLI in non-interactive mode against the current repo.
         """
-        raise NotImplementedError("AI backend not connected — override _invoke_agent()")
+        prompt = build_codex_prompt(task)
+        sh([
+            "codex",
+            "exec",
+            "--full-auto",
+            "-C",
+            str(Path.cwd()),
+            prompt,
+        ])
 
     def refresh_git_status(self) -> None:
         out = git("status", "--porcelain").strip()
@@ -476,15 +504,30 @@ class AgentFSM:
         title = f"{head}: automated updates"
         body = "Automated changes by coding agent.\n\n- Local tests: impacted subset\n- CI: GitHub Actions\n"
 
-        out = gh_json_cmd(
+        url = gh(
             "pr", "create",
             "--base", base,
             "--head", head,
             "--title", title,
             "--body", body,
-            "--json", "number,url",
+        ).strip()
+
+        prs = gh_json_cmd(
+            "pr", "list",
+            "--head", head,
+            "--state", "open",
+            "--json", "number,url,headRefName,baseRefName",
         )
-        self.ctx.pr_id = str(out["number"])
+        if prs:
+            self.ctx.pr_id = str(prs[0]["number"])
+            return
+
+        pr_id = parse_pr_number_from_url(url)
+        if pr_id:
+            self.ctx.pr_id = pr_id
+            return
+
+        raise RuntimeError(f"Created PR for {head!r}, but could not determine its number.")
 
     def poll_ci(self) -> None:
         """Update ctx.ci_status and ctx.approved."""
