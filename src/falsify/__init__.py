@@ -114,6 +114,24 @@ def build_codex_prompt(task: str) -> str:
     )
 
 
+def github_repo() -> str:
+    url = git("remote", "get-url", "origin").strip()
+    patterns = (
+        r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/.]+?)(?:\.git)?$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return f"{match.group('owner')}/{match.group('repo')}"
+    raise RuntimeError(f"Could not parse GitHub repo from origin remote: {url}")
+
+
+def github_owner_repo() -> tuple[str, str]:
+    repo = github_repo()
+    owner, name = repo.split("/", 1)
+    return owner, name
+
+
 # ── domain types ──────────────────────────────────────────────────────────────
 
 CiStatus = Optional[Literal["running", "pass", "fail"]]
@@ -314,7 +332,9 @@ class AgentFSM:
         if not self.ctx.pr_id:
             return
 
-        data = gh_json_cmd("pr", "view", self.ctx.pr_id, "--json", "reviewThreads")
+        data = gh_json_cmd(
+            "pr", "view", self.ctx.pr_id, "-R", github_repo(), "--json", "reviewThreads"
+        )
         for thread in data.get("reviewThreads", []):
             if thread.get("isResolved") or thread.get("isOutdated"):
                 continue
@@ -492,6 +512,7 @@ class AgentFSM:
         base = pick_pr_base_branch()
         head = self.ctx.feat_branch
         current = current_branch_name()
+        repo = github_repo()
 
         if current == head:
             sh(["git", "push", "-u", "origin", head])
@@ -501,6 +522,7 @@ class AgentFSM:
         # Find existing open PR for this head branch
         prs = gh_json_cmd(
             "pr", "list",
+            "-R", repo,
             "--head", head,
             "--state", "open",
             "--json", "number,url,headRefName,baseRefName",
@@ -515,6 +537,7 @@ class AgentFSM:
 
         url = gh(
             "pr", "create",
+            "-R", repo,
             "--base", base,
             "--head", head,
             "--title", title,
@@ -523,6 +546,7 @@ class AgentFSM:
 
         prs = gh_json_cmd(
             "pr", "list",
+            "-R", repo,
             "--head", head,
             "--state", "open",
             "--json", "number,url,headRefName,baseRefName",
@@ -546,14 +570,16 @@ class AgentFSM:
             return
 
         pr_num = self.ctx.pr_id
-        pr = gh_json_cmd("pr", "view", pr_num, "--json", "headRefOid,reviewDecision")
+        repo = github_repo()
+        owner, name = github_owner_repo()
+        pr = gh_json_cmd("pr", "view", pr_num, "-R", repo, "--json", "headRefOid,reviewDecision")
         sha = pr["headRefOid"]
 
         self.ctx.approved = (pr.get("reviewDecision") == "APPROVED")
 
         checks = gh_json_cmd(
             "api",
-            f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs",
+            f"repos/{owner}/{name}/commits/{sha}/check-runs",
             "-q",
             "{check_runs: .check_runs | map({name: .name, status: .status, conclusion: .conclusion})}",
         )
@@ -590,12 +616,14 @@ class AgentFSM:
             self.ctx.todos.append(Todo(kind="ci_failure", payload={"reason": "no_pr"}))
             return
 
-        pr = gh_json_cmd("pr", "view", self.ctx.pr_id, "--json", "headRefOid")
+        repo = github_repo()
+        owner, name = github_owner_repo()
+        pr = gh_json_cmd("pr", "view", self.ctx.pr_id, "-R", repo, "--json", "headRefOid")
         sha = pr["headRefOid"]
 
         checks = gh_json_cmd(
             "api",
-            f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs",
+            f"repos/{owner}/{name}/commits/{sha}/check-runs",
             "-q",
             "{check_runs: .check_runs | map({name: .name, status: .status, conclusion: .conclusion, details_url: .details_url})}",
         )
