@@ -60,6 +60,30 @@ def require_clean_tooling() -> None:
     sh(["gh", "--version"])
 
 
+def git_branch_exists(ref: str) -> bool:
+    return subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", ref],
+        text=True,
+        capture_output=True,
+    ).returncode == 0
+
+
+def pick_pr_base_branch() -> str:
+    for candidate in ("dev", "develop", "main", "master"):
+        if git_branch_exists(candidate) or git_branch_exists(f"origin/{candidate}"):
+            return candidate
+    raise RuntimeError(
+        "Could not determine a PR base branch. Tried: dev, develop, main, master."
+    )
+
+
+def current_branch_name() -> str:
+    branch = git("branch", "--show-current").strip()
+    if not branch:
+        raise RuntimeError("Cannot sync PR from detached HEAD.")
+    return branch
+
+
 # ── domain types ──────────────────────────────────────────────────────────────
 
 CiStatus = Optional[Literal["running", "pass", "fail"]]
@@ -218,7 +242,8 @@ class AgentFSM:
         self.committed()
 
     def on_enter_PR_SYNC(self):
-        self.log(f"push {self.ctx.feat_branch!r} → dev")
+        base = pick_pr_base_branch()
+        self.log(f"push {self.ctx.feat_branch!r} → {base}")
         self.pr_sync_to_dev()
         self.log_detail(f"PR #{self.ctx.pr_id}")
         self.pr_created_or_updated()
@@ -427,11 +452,14 @@ class AgentFSM:
     def pr_sync_to_dev(self) -> None:
         require_clean_tooling()
 
-        base = "dev"
+        base = pick_pr_base_branch()
         head = self.ctx.feat_branch
+        current = current_branch_name()
 
-        sh(["git", "checkout", head])
-        sh(["git", "push", "-u", "origin", head])
+        if current == head:
+            sh(["git", "push", "-u", "origin", head])
+        else:
+            sh(["git", "push", "origin", f"HEAD:refs/heads/{head}"])
 
         # Find existing open PR for this head branch
         prs = gh_json_cmd(
