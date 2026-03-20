@@ -12,6 +12,12 @@ _SUBCOMMANDS = {"run", "doctor"}
 
 def _add_run_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
+        "--agent-backend",
+        default="codex",
+        choices=("codex", "codex-oss"),
+        help="Agent backend to use for fix tasks (default: codex).",
+    )
+    p.add_argument(
         "--port", type=int, default=8765, metavar="PORT",
         help="Observer dashboard port (default: 8765).",
     )
@@ -47,7 +53,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
     print(f"\n  {args.prog_name} {version}\n")
 
-    ctx = Context(feat_branch=args.feat_branch)
+    ctx = Context(feat_branch=args.feat_branch, agent_backend=args.agent_backend)
     fsm = AgentFSM(ctx=ctx)
 
     if not args.no_observer:
@@ -66,7 +72,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
 def _cmd_doctor(_args: argparse.Namespace) -> None:
     from falsify.doctor import run_doctor
-    ok = run_doctor()
+    ok = run_doctor(_args.agent_backend)
     sys.exit(0 if ok else 1)
 
 
@@ -95,6 +101,12 @@ def main() -> None:
     doctor_p = subparsers.add_parser(
         "doctor",
         help="Check system prerequisites.",
+    )
+    doctor_p.add_argument(
+        "--agent-backend",
+        default="codex",
+        choices=("codex", "codex-oss"),
+        help="Agent backend to validate (default: codex).",
     )
     doctor_p.set_defaults(func=_cmd_doctor)
 

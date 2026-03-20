@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from typing import Any, Optional
 
+from falsify.types import AgentBackend
 
 def sh(
     cmd: list[str],
@@ -85,13 +87,64 @@ def parse_pr_number_from_url(url: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def build_codex_prompt(task: str) -> str:
+def build_agent_prompt(task: str) -> str:
     return (
         "You are operating inside the current git repository as an automated coding agent.\n"
         "Read the codebase, make the smallest correct changes to complete the task, and edit files directly.\n"
         "After changes, briefly summarize what you changed.\n\n"
         f"Task:\n{task}\n"
     )
+
+
+def build_agent_command(
+    backend: AgentBackend,
+    prompt: str,
+    cwd: Optional[str] = None,
+) -> list[str]:
+    workdir = cwd or os.getcwd()
+    cmd = ["codex", "exec"]
+    if backend == "codex-oss":
+        cmd.extend(["--oss", "--local-provider", "ollama"])
+    cmd.extend(["--full-auto", "-C", workdir, prompt])
+    return cmd
+
+
+def local_backend_compute() -> Optional[str]:
+    """Return the current Ollama processor mode for the local OSS backend."""
+    result = subprocess.run(
+        ["ollama", "ps"],
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return None
+
+    lines = [line.rstrip() for line in result.stdout.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return None
+
+    header = re.split(r"\s{2,}", lines[0].strip())
+    try:
+        processor_idx = header.index("PROCESSOR")
+    except ValueError:
+        return None
+
+    row = re.split(r"\s{2,}", lines[1].strip())
+    if processor_idx >= len(row):
+        return None
+
+    processor = row[processor_idx].strip()
+    upper = processor.upper()
+    has_cpu = "CPU" in upper
+    has_gpu = "GPU" in upper
+
+    if has_cpu and has_gpu:
+        return processor
+    if has_gpu:
+        return "GPU"
+    if has_cpu:
+        return "CPU"
+    return processor or None
 
 
 def github_repo() -> str:

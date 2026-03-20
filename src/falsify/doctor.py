@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
@@ -35,15 +36,66 @@ class Check:
     fixable: bool = False
 
 
-def _run_cmd(args: list[str]) -> tuple[int, str]:
+def _run_cmd(args: list[str], env: Optional[dict[str, str]] = None) -> tuple[int, str]:
     """Run *args*, return (returncode, combined stdout+stderr)."""
     try:
-        p = subprocess.run(args, capture_output=True, text=True, timeout=10)
+        p = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+        )
         return p.returncode, (p.stdout + p.stderr).strip()
     except FileNotFoundError:
         return 1, "not found"
     except subprocess.TimeoutExpired:
         return 1, "timed out"
+
+
+def _probe_url(url: str) -> tuple[bool, str]:
+    code, out = _run_cmd([
+        "curl",
+        "-fsS",
+        "--max-time",
+        "3",
+        url,
+    ])
+    return code == 0, out or "unreachable"
+
+
+def _candidate_ollama_hosts() -> list[str]:
+    hosts = ["127.0.0.1", "localhost", "host.docker.internal"]
+    resolv_conf = Path("/etc/resolv.conf")
+    if resolv_conf.exists():
+        for line in resolv_conf.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("nameserver "):
+                host = line.split()[1]
+                if host not in hosts:
+                    hosts.append(host)
+    return hosts
+
+
+def detect_ollama_base_url() -> Optional[str]:
+    env_url = os.environ.get("OLLAMA_HOST", "").strip()
+    candidates = []
+    if env_url:
+        if env_url.startswith("http://") or env_url.startswith("https://"):
+            candidates.append(env_url.rstrip("/"))
+        else:
+            candidates.append(f"http://{env_url.rstrip('/')}")
+    candidates.extend(f"http://{host}:11434" for host in _candidate_ollama_hosts())
+
+    seen: set[str] = set()
+    for base_url in candidates:
+        if base_url in seen:
+            continue
+        seen.add(base_url)
+        ok, _ = _probe_url(f"{base_url}/api/tags")
+        if ok:
+            return base_url
+    return None
 
 
 # ── individual checks ─────────────────────────────────────────────────────────
@@ -144,6 +196,50 @@ def check_codex_login() -> Check:
         hint="need codex login" if not ok else "",
     )
 
+
+def check_ollama_reachable() -> Check:
+    base_url = detect_ollama_base_url()
+    ok = base_url is not None
+    return Check(
+        label="ollama",
+        ok=ok,
+        detail=base_url or "not reachable",
+        hint=(
+            "Start Ollama in WSL or on the Windows host, or set OLLAMA_HOST."
+            if not ok else ""
+        ),
+    )
+
+
+def check_ollama_model(model: str = "gpt-oss:20b") -> Check:
+    if shutil.which("ollama") is None:
+        return Check(
+            label=f"ollama model {model}",
+            ok=False,
+            detail="ollama CLI not found",
+            hint=f"Install Ollama CLI and pull the model: ollama pull {model}",
+        )
+
+    base_url = detect_ollama_base_url()
+    env = None
+    if base_url:
+        env = os.environ.copy()
+        env["OLLAMA_HOST"] = base_url
+
+    code, out = _run_cmd(["ollama", "list"], env=env)
+    installed_models = [
+        line.split()[0]
+        for line in out.splitlines()
+        if line.strip() and not line.lstrip().startswith("NAME")
+    ]
+    ok = code == 0 and model in installed_models
+    return Check(
+        label=f"ollama model {model}",
+        ok=ok,
+        detail=model if ok else "not installed",
+        hint=f"Run: ollama pull {model}" if not ok else "",
+    )
+
 def check_nodejs() -> Check:
     code, out = _run_cmd(["node", "-v"])
     ok = code == 0
@@ -195,7 +291,7 @@ def _print_check(c: Check) -> None:
 
 # ── main entry point ──────────────────────────────────────────────────────────
 
-def run_doctor() -> bool:
+def run_doctor(agent_backend: str = "codex") -> bool:
     """
     Run all pre-flight checks.
 
@@ -213,9 +309,21 @@ def run_doctor() -> bool:
         check_gh_auth(),
         check_graphviz(),
         check_pytest(),
-        check_codex(),
-        check_codex_login()
     ]
+
+    if agent_backend == "codex":
+        checks.extend([
+            check_codex(),
+            check_codex_login(),
+        ])
+    elif agent_backend == "codex-oss":
+        checks.extend([
+            check_codex(),
+            check_ollama_reachable(),
+            check_ollama_model(),
+        ])
+    else:
+        raise RuntimeError(f"Unsupported agent backend: {agent_backend}")
 
     for c in checks:
         _print_check(c)

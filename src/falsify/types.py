@@ -5,6 +5,7 @@ from typing import Any, Literal, Optional
 
 
 CiStatus = Optional[Literal["running", "pass", "fail"]]
+AgentBackend = Literal["codex", "codex-oss"]
 
 
 @dataclass
@@ -20,8 +21,16 @@ class Test:
 
 
 @dataclass
+class PendingReviewThread:
+    thread_id: str
+    comment_id: int
+    reply_body: str
+
+
+@dataclass
 class Context:
     todos: list[Todo] = field(default_factory=list)
+    pending_review_threads: list[PendingReviewThread] = field(default_factory=list)
     git_dirty: bool = False
     impacted_tests: list[Test] = field(default_factory=list)
     failing: list[tuple[Test, str]] = field(default_factory=list)
@@ -32,3 +41,4 @@ class Context:
     pr_closed: bool = False
     feat_branch: str = "feat/agent"
     force_full_suite_next: bool = False
+    agent_backend: AgentBackend = "codex"

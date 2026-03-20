@@ -10,7 +10,8 @@ from transitions import Machine
 
 from falsify.console import _BOLD, _DIM, _GREEN, _RED, _RST, _STATE_COL, _W
 from falsify.shell import (
-    build_codex_prompt,
+    build_agent_command,
+    build_agent_prompt,
     current_branch_name,
     gh,
     gh_graphql_json,
@@ -24,7 +25,7 @@ from falsify.shell import (
     sh,
     sh_stream,
 )
-from falsify.types import Context, Test, Todo
+from falsify.types import Context, PendingReviewThread, Test, Todo
 
 
 class AgentFSM:
@@ -62,6 +63,7 @@ class AgentFSM:
         ("PR_SYNC", "WAIT_CI", "pr_created_or_updated"),
         ("WAIT_CI", "DONE", "pr_approved"),
         ("WAIT_CI", "TRIAGE_CI_FAIL", "ci_failed"),
+        ("WAIT_CI", "PLAN", "review_comments_pending"),
         ("WAIT_CI", "WAIT_CI", "checks_running"),
         ("WAIT_CI", "WAIT_CI", "ci_passed_not_approved"),
         ("TRIAGE_CI_FAIL", "PLAN", "add_failure_to_todos"),
@@ -150,6 +152,7 @@ class AgentFSM:
     def on_enter_COMMIT(self):
         self.log("staging and committing…")
         self.git_commit()
+        self.resolve_pending_review_threads()
         self.committed()
 
     def on_enter_PR_SYNC(self):
@@ -184,6 +187,10 @@ class AgentFSM:
             return
 
         if self.ci_passed_status() and not self.pr_is_approved():
+            self.load_todos()
+            if self.has_todos():
+                self.review_comments_pending()
+                return
             time.sleep(10)
             self.ci_passed_not_approved()
 
@@ -211,10 +218,13 @@ class AgentFSM:
                 pullRequest(number:$number) {
                   reviewThreads(first:100) {
                     nodes {
+                      id
                       isResolved
                       isOutdated
+                      viewerCanResolve
                       comments(first:100) {
                         nodes {
+                          databaseId
                           body
                           path
                           line
@@ -247,6 +257,9 @@ class AgentFSM:
             self.ctx.todos.append(Todo(
                 kind="review_comment",
                 payload={
+                    "thread_id": thread.get("id"),
+                    "viewer_can_resolve": bool(thread.get("viewerCanResolve")),
+                    "comment_id": first.get("databaseId"),
                     "body": first.get("body", ""),
                     "path": first.get("path"),
                     "line": first.get("line"),
@@ -277,6 +290,16 @@ class AgentFSM:
             line = todo.payload.get("line")
             location = f"{path}:{line}" if path and line else path or "(general)"
             self._invoke_agent(f"Address review comment at {location}:\n\n{body}")
+            thread_id = todo.payload.get("thread_id")
+            comment_id = todo.payload.get("comment_id")
+            if thread_id and comment_id:
+                self.ctx.pending_review_threads.append(
+                    PendingReviewThread(
+                        thread_id=str(thread_id),
+                        comment_id=int(comment_id),
+                        reply_body="Addressed in the latest automated commit.",
+                    )
+                )
         elif todo.kind == "ci_failure":
             check = todo.payload.get("check", "CI")
             reason = todo.payload.get("reason")
@@ -291,16 +314,10 @@ class AgentFSM:
             self.log_detail(f"unhandled todo kind: {todo.kind!r}")
 
     def _invoke_agent(self, task: str) -> None:
-        prompt = build_codex_prompt(task)
-        self.log_detail("launching codex…")
-        sh_stream([
-            "codex",
-            "exec",
-            "--full-auto",
-            "-C",
-            str(Path.cwd()),
-            prompt,
-        ])
+        prompt = build_agent_prompt(task)
+        backend = self.ctx.agent_backend
+        self.log_detail(f"launching {backend}…")
+        sh_stream(build_agent_command(backend, prompt, str(Path.cwd())))
 
     def refresh_git_status(self) -> None:
         out = git("status", "--porcelain").strip()
@@ -401,6 +418,49 @@ class AgentFSM:
         summary = stat.splitlines()[-1] if stat else "nothing staged"
         self.log_detail(summary)
         self.ctx.git_dirty = False
+
+    def reply_to_review_comment(self, comment_id: int, body: str) -> None:
+        if self.ctx.pr_id is None:
+            raise RuntimeError("Cannot reply to a review comment without a PR number.")
+        repo = github_repo()
+        gh_json_cmd(
+            "api",
+            f"repos/{repo}/pulls/{self.ctx.pr_id}/comments",
+            "-f",
+            f"body={body}",
+            "-F",
+            f"in_reply_to={comment_id}",
+        )
+
+    def resolve_pending_review_threads(self) -> None:
+        pending_threads = list({
+            (item.thread_id, item.comment_id, item.reply_body): item
+            for item in self.ctx.pending_review_threads
+        }.values())
+        if not pending_threads:
+            return
+
+        for pending in pending_threads:
+            self.reply_to_review_comment(pending.comment_id, pending.reply_body)
+            self.log_detail(
+                f"replied to review comment {pending.comment_id} on thread {pending.thread_id}"
+            )
+            gh_graphql_json(
+                """
+                mutation($threadId:ID!) {
+                  resolveReviewThread(input:{threadId:$threadId}) {
+                    thread {
+                      id
+                      isResolved
+                    }
+                  }
+                }
+                """,
+                threadId=pending.thread_id,
+            )
+            self.log_detail(f"resolved review thread {pending.thread_id}")
+
+        self.ctx.pending_review_threads.clear()
 
     def pr_sync_to_dev(self) -> None:
         require_clean_tooling()
