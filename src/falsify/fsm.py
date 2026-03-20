@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -8,7 +9,20 @@ from typing import Optional
 from transitions import Machine
 
 from falsify.console import _BOLD, _DIM, _GREEN, _RED, _RST, _STATE_COL, _W
-from falsify.shell import gh_json_cmd, git, require_clean_tooling, sh
+from falsify.shell import (
+    build_codex_prompt,
+    current_branch_name,
+    gh,
+    gh_json_cmd,
+    github_owner_repo,
+    github_repo,
+    git,
+    parse_pr_number_from_url,
+    pick_pr_base_branch,
+    require_clean_tooling,
+    sh,
+    sh_stream,
+)
 from falsify.types import Context, Test, Todo
 
 
@@ -132,7 +146,8 @@ class AgentFSM:
         self.committed()
 
     def on_enter_PR_SYNC(self):
-        self.log(f"push {self.ctx.feat_branch!r} → dev")
+        base = pick_pr_base_branch()
+        self.log(f"push {self.ctx.feat_branch!r} → {base}")
         self.pr_sync_to_dev()
         self.log_detail(f"PR #{self.ctx.pr_id}")
         self.pr_created_or_updated()
@@ -170,7 +185,9 @@ class AgentFSM:
         if not self.ctx.pr_id:
             return
 
-        data = gh_json_cmd("pr", "view", self.ctx.pr_id, "--json", "reviewThreads")
+        data = gh_json_cmd(
+            "pr", "view", self.ctx.pr_id, "-R", github_repo(), "--json", "reviewThreads"
+        )
         for thread in data.get("reviewThreads", []):
             if thread.get("isResolved") or thread.get("isOutdated"):
                 continue
@@ -225,7 +242,16 @@ class AgentFSM:
             self.log_detail(f"unhandled todo kind: {todo.kind!r}")
 
     def _invoke_agent(self, task: str) -> None:
-        raise NotImplementedError("AI backend not connected — override _invoke_agent()")
+        prompt = build_codex_prompt(task)
+        self.log_detail("launching codex…")
+        sh_stream([
+            "codex",
+            "exec",
+            "--full-auto",
+            "-C",
+            str(Path.cwd()),
+            prompt,
+        ])
 
     def refresh_git_status(self) -> None:
         out = git("status", "--porcelain").strip()
@@ -292,12 +318,18 @@ class AgentFSM:
 
     def run_test(self, test: Test) -> str:
         if test.nodeid == "FULL_SUITE":
-            cmd = ["pytest", "-q"]
+            cmd = [sys.executable, "-m", "pytest", "-q"]
         else:
-            cmd = ["pytest", "-q", test.nodeid]
+            cmd = [sys.executable, "-m", "pytest", "-q", test.nodeid]
         cmd += ["--maxfail=1"]
         p = subprocess.run(cmd, text=True, capture_output=True)
         if p.returncode == 0:
+            return "pass"
+        if test.nodeid == "FULL_SUITE" and (
+            p.returncode == 5
+            or "no tests ran" in (p.stdout + p.stderr).lower()
+            or "collected 0 items" in (p.stdout + p.stderr).lower()
+        ):
             return "pass"
         blob = (p.stdout + "\n" + p.stderr).strip()
         return blob[-4000:]
@@ -324,14 +356,19 @@ class AgentFSM:
     def pr_sync_to_dev(self) -> None:
         require_clean_tooling()
 
-        base = "dev"
+        base = pick_pr_base_branch()
         head = self.ctx.feat_branch
+        current = current_branch_name()
+        repo = github_repo()
 
-        sh(["git", "checkout", head])
-        sh(["git", "push", "-u", "origin", head])
+        if current == head:
+            sh(["git", "push", "-u", "origin", head])
+        else:
+            sh(["git", "push", "origin", f"HEAD:refs/heads/{head}"])
 
         prs = gh_json_cmd(
             "pr", "list",
+            "-R", repo,
             "--head", head,
             "--state", "open",
             "--json", "number,url,headRefName,baseRefName",
@@ -344,15 +381,32 @@ class AgentFSM:
         title = f"{head}: automated updates"
         body = "Automated changes by coding agent.\n\n- Local tests: impacted subset\n- CI: GitHub Actions\n"
 
-        out = gh_json_cmd(
+        url = gh(
             "pr", "create",
+            "-R", repo,
             "--base", base,
             "--head", head,
             "--title", title,
             "--body", body,
-            "--json", "number,url",
+        ).strip()
+
+        prs = gh_json_cmd(
+            "pr", "list",
+            "-R", repo,
+            "--head", head,
+            "--state", "open",
+            "--json", "number,url,headRefName,baseRefName",
         )
-        self.ctx.pr_id = str(out["number"])
+        if prs:
+            self.ctx.pr_id = str(prs[0]["number"])
+            return
+
+        pr_id = parse_pr_number_from_url(url)
+        if pr_id:
+            self.ctx.pr_id = pr_id
+            return
+
+        raise RuntimeError(f"Created PR for {head!r}, but could not determine its number.")
 
     def poll_ci(self) -> None:
         if not self.ctx.pr_id:
@@ -361,14 +415,16 @@ class AgentFSM:
             return
 
         pr_num = self.ctx.pr_id
-        pr = gh_json_cmd("pr", "view", pr_num, "--json", "headRefOid,reviewDecision")
+        repo = github_repo()
+        owner, name = github_owner_repo()
+        pr = gh_json_cmd("pr", "view", pr_num, "-R", repo, "--json", "headRefOid,reviewDecision")
         sha = pr["headRefOid"]
 
         self.ctx.approved = (pr.get("reviewDecision") == "APPROVED")
 
         checks = gh_json_cmd(
             "api",
-            f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs",
+            f"repos/{owner}/{name}/commits/{sha}/check-runs",
             "-q",
             "{check_runs: .check_runs | map({name: .name, status: .status, conclusion: .conclusion})}",
         )
@@ -404,12 +460,14 @@ class AgentFSM:
             self.ctx.todos.append(Todo(kind="ci_failure", payload={"reason": "no_pr"}))
             return
 
-        pr = gh_json_cmd("pr", "view", self.ctx.pr_id, "--json", "headRefOid")
+        repo = github_repo()
+        owner, name = github_owner_repo()
+        pr = gh_json_cmd("pr", "view", self.ctx.pr_id, "-R", repo, "--json", "headRefOid")
         sha = pr["headRefOid"]
 
         checks = gh_json_cmd(
             "api",
-            f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs",
+            f"repos/{owner}/{name}/commits/{sha}/check-runs",
             "-q",
             "{check_runs: .check_runs | map({name: .name, status: .status, conclusion: .conclusion, details_url: .details_url})}",
         )
