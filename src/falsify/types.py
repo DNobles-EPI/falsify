@@ -5,6 +5,7 @@ from typing import Any, Literal, Optional
 
 
 CiStatus = Optional[Literal["running", "pass", "fail"]]
+AgentBackend = Literal["codex", "codex-oss"]
 
 
 @dataclass
@@ -32,3 +33,4 @@ class Context:
     pr_closed: bool = False
     feat_branch: str = "feat/agent"
     force_full_suite_next: bool = False
+    agent_backend: AgentBackend = "codex"

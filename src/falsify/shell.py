@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from typing import Any, Optional
 
+from falsify.types import AgentBackend
 
 def sh(
     cmd: list[str],
@@ -85,13 +87,26 @@ def parse_pr_number_from_url(url: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def build_codex_prompt(task: str) -> str:
+def build_agent_prompt(task: str) -> str:
     return (
         "You are operating inside the current git repository as an automated coding agent.\n"
         "Read the codebase, make the smallest correct changes to complete the task, and edit files directly.\n"
         "After changes, briefly summarize what you changed.\n\n"
         f"Task:\n{task}\n"
     )
+
+
+def build_agent_command(
+    backend: AgentBackend,
+    prompt: str,
+    cwd: Optional[str] = None,
+) -> list[str]:
+    workdir = cwd or os.getcwd()
+    cmd = ["codex", "exec"]
+    if backend == "codex-oss":
+        cmd.extend(["--oss", "--local-provider", "ollama"])
+    cmd.extend(["--full-auto", "-C", workdir, prompt])
+    return cmd
 
 
 def github_repo() -> str:

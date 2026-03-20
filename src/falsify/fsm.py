@@ -10,7 +10,8 @@ from transitions import Machine
 
 from falsify.console import _BOLD, _DIM, _GREEN, _RED, _RST, _STATE_COL, _W
 from falsify.shell import (
-    build_codex_prompt,
+    build_agent_command,
+    build_agent_prompt,
     current_branch_name,
     gh,
     gh_graphql_json,
@@ -291,16 +292,10 @@ class AgentFSM:
             self.log_detail(f"unhandled todo kind: {todo.kind!r}")
 
     def _invoke_agent(self, task: str) -> None:
-        prompt = build_codex_prompt(task)
-        self.log_detail("launching codex…")
-        sh_stream([
-            "codex",
-            "exec",
-            "--full-auto",
-            "-C",
-            str(Path.cwd()),
-            prompt,
-        ])
+        prompt = build_agent_prompt(task)
+        backend = self.ctx.agent_backend
+        self.log_detail(f"launching {backend}…")
+        sh_stream(build_agent_command(backend, prompt, str(Path.cwd())))
 
     def refresh_git_status(self) -> None:
         out = git("status", "--porcelain").strip()

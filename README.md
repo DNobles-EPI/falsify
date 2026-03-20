@@ -42,6 +42,39 @@ fsm = AgentFSM()
 fsm.run()
 ```
 
+CLI:
+
+```bash
+falsify run --agent-backend codex
+falsify run --agent-backend codex-oss
+falsify doctor --agent-backend codex
+falsify doctor --agent-backend codex-oss
+```
+
+## Local OSS Backend
+
+`codex-oss` uses Codex CLI with Ollama as the local provider and targets `gpt-oss:20b`.
+
+In WSL, two topologies are supported:
+- Ollama running inside the Linux distro
+- Ollama running on the Windows host and reached from WSL
+
+Setup:
+
+```bash
+# Standard Codex backend
+./scripts/setup.sh codex
+
+# Local OSS backend with autodetection
+./scripts/setup.sh codex-oss auto
+
+# Force a specific Ollama topology
+./scripts/setup.sh codex-oss wsl
+./scripts/setup.sh codex-oss windows
+```
+
+The setup script validates the exact toolchain that `falsify` uses. For `codex-oss`, it checks Codex, reaches Ollama, ensures `gpt-oss:20b` is present, and performs a non-interactive Codex OSS self-check.
+
 ## Development
 
 ```bash
