@@ -97,6 +97,12 @@ class AgentFSM:
     def pr_is_approved(self) -> bool:
         return bool(self.ctx.approved)
 
+    def pr_is_merged(self) -> bool:
+        return bool(self.ctx.pr_merged)
+
+    def pr_is_closed(self) -> bool:
+        return bool(self.ctx.pr_closed)
+
     def ci_running(self) -> bool:
         return self.ctx.ci_status == "running"
 
@@ -157,6 +163,13 @@ class AgentFSM:
         self.poll_ci()
         self.log(f"ci={self.ctx.ci_status or 'unknown'}  approved={self.ctx.approved}")
 
+        if self.pr_is_merged():
+            self.pr_approved()
+            return
+
+        if self.pr_is_closed():
+            raise RuntimeError(f"PR #{self.ctx.pr_id} was closed without merge.")
+
         if self.pr_is_approved():
             self.pr_approved()
             return
@@ -180,7 +193,10 @@ class AgentFSM:
         self.add_failure_to_todos()
 
     def on_enter_DONE(self):
-        self.log("PR approved ✓")
+        if self.ctx.pr_merged:
+            self.log("PR merged ✓")
+        else:
+            self.log("PR approved ✓")
 
     def load_todos(self) -> None:
         self.ctx.todos.clear()
@@ -445,15 +461,27 @@ class AgentFSM:
         if not self.ctx.pr_id:
             self.ctx.ci_status = None
             self.ctx.approved = False
+            self.ctx.pr_merged = False
+            self.ctx.pr_closed = False
             return
 
         pr_num = self.ctx.pr_id
         repo = github_repo()
         owner, name = github_owner_repo()
-        pr = gh_json_cmd("pr", "view", pr_num, "-R", repo, "--json", "headRefOid,reviewDecision")
+        pr = gh_json_cmd(
+            "pr",
+            "view",
+            pr_num,
+            "-R",
+            repo,
+            "--json",
+            "headRefOid,reviewDecision,state,mergedAt",
+        )
         sha = pr["headRefOid"]
 
         self.ctx.approved = (pr.get("reviewDecision") == "APPROVED")
+        self.ctx.pr_merged = bool(pr.get("mergedAt"))
+        self.ctx.pr_closed = (pr.get("state") == "CLOSED" and not self.ctx.pr_merged)
 
         checks = gh_json_cmd(
             "api",
