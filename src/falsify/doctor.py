@@ -36,10 +36,16 @@ class Check:
     fixable: bool = False
 
 
-def _run_cmd(args: list[str]) -> tuple[int, str]:
+def _run_cmd(args: list[str], env: Optional[dict[str, str]] = None) -> tuple[int, str]:
     """Run *args*, return (returncode, combined stdout+stderr)."""
     try:
-        p = subprocess.run(args, capture_output=True, text=True, timeout=10)
+        p = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+        )
         return p.returncode, (p.stdout + p.stderr).strip()
     except FileNotFoundError:
         return 1, "not found"
@@ -214,8 +220,19 @@ def check_ollama_model(model: str = "gpt-oss:20b") -> Check:
             hint=f"Install Ollama CLI and pull the model: ollama pull {model}",
         )
 
-    code, out = _run_cmd(["ollama", "list"])
-    ok = code == 0 and model in out
+    base_url = detect_ollama_base_url()
+    env = None
+    if base_url:
+        env = os.environ.copy()
+        env["OLLAMA_HOST"] = base_url
+
+    code, out = _run_cmd(["ollama", "list"], env=env)
+    installed_models = [
+        line.split()[0]
+        for line in out.splitlines()
+        if line.strip() and not line.lstrip().startswith("NAME")
+    ]
+    ok = code == 0 and model in installed_models
     return Check(
         label=f"ollama model {model}",
         ok=ok,

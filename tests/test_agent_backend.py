@@ -4,7 +4,7 @@ import sys
 from subprocess import CompletedProcess
 
 from falsify import AgentFSM, Context
-from falsify.doctor import Check, run_doctor
+from falsify.doctor import Check, check_ollama_model, run_doctor
 from falsify.shell import build_agent_command, local_backend_compute
 
 
@@ -69,6 +69,26 @@ def test_local_backend_compute_detects_gpu_only(monkeypatch) -> None:
     )
 
     assert local_backend_compute() == "GPU"
+
+
+def test_check_ollama_model_requires_exact_tag_match(monkeypatch) -> None:
+    monkeypatch.setattr("falsify.doctor.shutil.which", lambda _: "/usr/bin/ollama")
+    monkeypatch.setattr("falsify.doctor.detect_ollama_base_url", lambda: "http://127.0.0.1:11434")
+    monkeypatch.setattr(
+        "falsify.doctor._run_cmd",
+        lambda *args, **kwargs: (
+            0,
+            (
+                "NAME                    ID      SIZE    MODIFIED\n"
+                "my-gpt-oss:20b-variant  abc123  14 GB   2 hours ago\n"
+            ),
+        ),
+    )
+
+    check = check_ollama_model("gpt-oss:20b")
+
+    assert check.ok is False
+    assert check.detail == "not installed"
 
 
 def test_invoke_agent_uses_selected_backend(monkeypatch) -> None:
