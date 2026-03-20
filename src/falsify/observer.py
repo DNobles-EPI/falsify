@@ -118,6 +118,10 @@ _HTML = """\
   <div id="graph-panel"><div id="graph">Loading\u2026</div></div>
   <aside>
     <div class="card">
+      <div class="lbl">Agent backend</div>
+      <div class="val" id="agent-backend">\u2014</div>
+    </div>
+    <div class="card">
       <div class="lbl">Current state</div>
       <div class="val" id="cur-state">\u2014</div>
     </div>
@@ -143,6 +147,7 @@ async function poll() {
   try {
     const r = await fetch('/state');
     const d = await r.json();
+    document.getElementById('agent-backend').textContent = d.agent_backend;
     document.getElementById('cur-state').textContent = d.state;
     document.getElementById('elapsed').textContent = d.elapsed_seconds + 's';
     document.getElementById('status').textContent =
@@ -257,6 +262,7 @@ class StateObserver:
         """Return a JSON-serialisable snapshot of current observer state."""
         with self._lock:
             return {
+                "agent_backend": getattr(self.fsm.ctx, "agent_backend", "codex"),
                 "state": self._state,
                 "elapsed_seconds": round(time.monotonic() - self._entered_at, 1),
                 "visit_counts": dict(self._visits),
