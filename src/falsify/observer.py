@@ -9,6 +9,8 @@ from typing import Dict, List, Optional, Tuple
 
 import graphviz
 
+from falsify.shell import local_backend_compute
+
 # ── graph styling ─────────────────────────────────────────────────────────────
 
 _NODE_COLORS: Dict[str, str] = {
@@ -121,6 +123,10 @@ _HTML = """\
       <div class="lbl">Agent backend</div>
       <div class="val" id="agent-backend">\u2014</div>
     </div>
+    <div class="card" id="compute-card" style="display:none">
+      <div class="lbl">Local compute</div>
+      <div class="val" id="local-compute">\u2014</div>
+    </div>
     <div class="card">
       <div class="lbl">Current state</div>
       <div class="val" id="cur-state">\u2014</div>
@@ -148,6 +154,13 @@ async function poll() {
     const r = await fetch('/state');
     const d = await r.json();
     document.getElementById('agent-backend').textContent = d.agent_backend;
+    const computeCard = document.getElementById('compute-card');
+    if (d.local_compute) {
+      computeCard.style.display = '';
+      document.getElementById('local-compute').textContent = d.local_compute;
+    } else {
+      computeCard.style.display = 'none';
+    }
     document.getElementById('cur-state').textContent = d.state;
     document.getElementById('elapsed').textContent = d.elapsed_seconds + 's';
     document.getElementById('status').textContent =
@@ -233,6 +246,8 @@ class StateObserver:
         self._stop = threading.Event()
         # Cache one SVG per distinct active state (at most len(states) renders)
         self._svg_cache: Dict[str, str] = {}
+        self._local_compute: Optional[str] = None
+        self._local_compute_checked_at: float = 0.0
 
     # ── internals ─────────────────────────────────────────────────────────────
 
@@ -261,8 +276,17 @@ class StateObserver:
     def snapshot(self) -> dict:
         """Return a JSON-serialisable snapshot of current observer state."""
         with self._lock:
+            backend = getattr(self.fsm.ctx, "agent_backend", "codex")
+            local_compute = None
+            if backend == "codex-oss":
+                now = time.monotonic()
+                if now - self._local_compute_checked_at >= 1.0:
+                    self._local_compute = local_backend_compute()
+                    self._local_compute_checked_at = now
+                local_compute = self._local_compute
             return {
-                "agent_backend": getattr(self.fsm.ctx, "agent_backend", "codex"),
+                "agent_backend": backend,
+                "local_compute": local_compute,
                 "state": self._state,
                 "elapsed_seconds": round(time.monotonic() - self._entered_at, 1),
                 "visit_counts": dict(self._visits),

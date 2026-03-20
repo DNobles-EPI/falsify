@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import sys
+from subprocess import CompletedProcess
 
 from falsify import AgentFSM, Context
 from falsify.doctor import Check, run_doctor
-from falsify.shell import build_agent_command
+from falsify.shell import build_agent_command, local_backend_compute
 
 
 def test_build_agent_command_for_codex() -> None:
@@ -34,6 +35,40 @@ def test_build_agent_command_for_codex_oss() -> None:
         "/tmp/repo",
         "fix it",
     ]
+
+
+def test_local_backend_compute_detects_mixed_cpu_gpu(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "falsify.shell.subprocess.run",
+        lambda *args, **kwargs: CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=(
+                "NAME           ID              SIZE     PROCESSOR          CONTEXT    UNTIL\n"
+                "gpt-oss:20b    abc             14 GB    47%/53% CPU/GPU   4096       4 minutes from now\n"
+            ),
+            stderr="",
+        ),
+    )
+
+    assert local_backend_compute() == "47%/53% CPU/GPU"
+
+
+def test_local_backend_compute_detects_gpu_only(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "falsify.shell.subprocess.run",
+        lambda *args, **kwargs: CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=(
+                "NAME    ID    SIZE    PROCESSOR    CONTEXT    UNTIL\n"
+                "model   abc   4 GB    100% GPU     4096       1 minute from now\n"
+            ),
+            stderr="",
+        ),
+    )
+
+    assert local_backend_compute() == "GPU"
 
 
 def test_invoke_agent_uses_selected_backend(monkeypatch) -> None:
